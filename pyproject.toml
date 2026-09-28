@@ -9,7 +9,10 @@ description = "Download data from online immune repertoire databases and format 
 readme = "README.rst"
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
-authors = [{name = "Susanna Marquez"}]
+authors = [
+    {name = "Susanna Marquez"},
+    {name = "Ayelet Peres"},
+]
 keywords = ["AIRR", "antibody", "repertoire", "immcantation", "OAS"]
 classifiers = [
     "Intended Audience :: Science/Research",
