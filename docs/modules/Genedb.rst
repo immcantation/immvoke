@@ -1,7 +1,7 @@
-immvoke.Schema
+immvoke.Genedb
 ----------------
 
-.. automodule:: immvoke.Schema
+.. automodule:: immvoke.Genedb
     :members:
     :undoc-members:
     :show-inheritance:

@@ -5,7 +5,7 @@ A germline reference is a set of allele sequences. IMGT and OGRDB provide them,
 and ReferenceSource turns a download into the airrflow reference tree through
 buildReference, reusing SourceBase's download machinery: searchUnits, fetchUnit,
 the schema and the HTTP client. The output shaping itself lives in
-sourcerer.Reference.
+immvoke.Reference.
 
 SourceBase also declares readUnit and normalizeChunk, the conversion step for
 sources that emit AIRR records; a germline source has nothing to convert, so
@@ -16,10 +16,10 @@ to repeat.
 # Info
 __author__ = 'Ayelet Peres'
 
-# Sourcerer imports
-from sourcerer.Exceptions import SourcererError
-from sourcerer.Reference import referenceFastaPath, writeFastaText
-from sourcerer.Sources.Base import SourceBase
+# Immvoke imports
+from immvoke.Exceptions import ImmvokeError
+from immvoke.Reference import referenceFastaPath, writeFastaText
+from immvoke.Sources.Base import SourceBase
 
 
 class ReferenceSource(SourceBase):
@@ -35,12 +35,12 @@ class ReferenceSource(SourceBase):
 
     def readUnit(self, path, unit):
         """Unused: a germline source has nothing to convert."""
-        raise SourcererError('%s builds a germline reference; there is nothing '
+        raise ImmvokeError('%s builds a germline reference; there is nothing '
                              'to convert' % self.name)
 
     def normalizeChunk(self, metadata, chunk, unit, offset, report):
         """Unused: a germline source has nothing to convert."""
-        raise SourcererError('%s builds a germline reference; there is nothing '
+        raise ImmvokeError('%s builds a germline reference; there is nothing '
                              'to convert' % self.name)
 
     def buildReference(self, entries, reference_dir):
@@ -55,6 +55,26 @@ class ReferenceSource(SourceBase):
           ReferenceReport: the files written.
         """
         raise NotImplementedError
+
+    def writeReferenceMetadata(self, reference_dir, units):
+        """
+        Write the provenance sidecar for this reference, if the source has one.
+
+        The default writes nothing; IMGT and OGRDB override it to record the
+        release and set versions their reference_base was built from.
+
+        Arguments:
+          reference_dir (Path): the reference_base root.
+          units (list): the DataUnits fetched.
+
+        Returns:
+          list: the metadata files written.
+        """
+        return []
+
+    def pinRelease(self, release):
+        """Reconstruct a past release; a no-op for a source that cannot."""
+        raise ImmvokeError('%s cannot re-download a pinned release' % self.name)
 
     def writeChain(self, reference_dir, species, kind, chain, records):
         """
