@@ -1,0 +1,166 @@
+name: release
+
+# Publishes a tagged version to PyPI (or TestPyPI for a dry run) and creates the
+# matching GitHub Release. Only tags whose commit is on master, and whose name
+# equals __version__ in src/immvoke/Version.py, can be published.
+#
+# Releases are triggered by hand for now: push the tag first (e.g. 0.1.0), then
+# run this workflow from the Actions tab with that tag, once with target
+# testpypi to check the upload and once with target pypi to release. The push
+# trigger below is left off until the pipeline has proven itself.
+#
+# Uses PyPI trusted publishing, so no API token is stored in the repository.
+# The "pypi" and "testpypi" environments and this workflow file must be
+# registered as trusted publishers for immvoke on pypi.org and test.pypi.org.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag on master, e.g. 0.1.0"
+        required: true
+        type: string
+      target:
+        description: "Where to publish"
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
+  # Enable once manual releases have proven the pipeline:
+  # push:
+  #   tags: ["[0-9]+.[0-9]+.[0-9]+*"]
+
+# On a tag push there are no inputs, so the tag is the pushed ref and the
+# target is PyPI.
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+# Read-only by default; jobs that publish widen this explicitly.
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check the tag is on master
+        run: |
+          git fetch origin master
+          if ! git merge-base --is-ancestor HEAD origin/master; then
+            echo "::error::Tag $TAG is not on master"
+            exit 1
+          fi
+      # A forgotten version bump would otherwise upload under the wrong number.
+      - name: Check the tag matches the package version
+        run: |
+          version=$(python -c "exec(open('src/immvoke/Version.py').read()); print(__version__)")
+          if [ "$TAG" != "$version" ]; then
+            echo "::error::Tag $TAG does not match __version__ $version in src/immvoke/Version.py"
+            exit 1
+          fi
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip build twine
+          pip install .
+      - name: Unit tests
+        run: python -m unittest discover -v
+      - name: Build sdist and wheel
+        run: python -m build
+      - name: Check distribution metadata
+        run: twine check --strict dist/*
+      # Running from /tmp guarantees the source tree cannot be picked up instead
+      # of the installed wheel.
+      - name: Install the wheel into a clean environment
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/pip install dist/*.whl
+      - name: Run from outside the source tree
+        working-directory: /tmp
+        run: /tmp/clean/bin/immvoke --version
+      # The body of this version's NEWS.rst section, without its heading. Empty
+      # when there is no section, in which case the release notes are generated.
+      - name: Extract release notes
+        run: |
+          awk -v heading="Version $TAG:" '
+            /^Version / { if (found) exit; if (index($0, heading) == 1) { found = 1; getline; next } }
+            found
+          ' NEWS.rst > notes.rst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notes
+          path: notes.rst
+
+  publish-testpypi:
+    needs: build
+    if: inputs.target == 'testpypi'
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/immvoke
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    needs: build
+    if: (inputs.target || 'pypi') == 'pypi'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/immvoke
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # Runs only after PyPI accepted the upload, so a failed publish leaves no
+  # orphan GitHub Release behind.
+  github-release:
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: notes
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -s notes.rst ]; then
+            notes=(--notes-file notes.rst)
+          else
+            notes=(--generate-notes)
+          fi
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --title "immvoke $TAG" "${notes[@]}"
