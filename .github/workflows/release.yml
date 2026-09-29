@@ -9,7 +9,7 @@ name: release
 # testpypi to check the upload and once with target pypi to release. The push
 # trigger below is left off until the pipeline has proven itself.
 #
-# Uses PyPI trusted publishing, so no API token is stored in the repository.
+# Uses PyPI trusted publishing.
 # The "pypi" and "testpypi" environments and this workflow file must be
 # registered as trusted publishers for immvoke on pypi.org and test.pypi.org.
 on:
