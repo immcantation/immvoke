@@ -7,3 +7,4 @@ tqdm>=4.64
 pyarrow>=14
 gdown>=5.0
 rapidfuzz>=3.0
+symscan>=0.8

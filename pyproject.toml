@@ -45,6 +45,10 @@ dependencies = [
     # runLevenshteinAnnotation uses rapidfuzz.distance.Levenshtein for
     # indel-tolerant (substitution + insertion + deletion) sequence comparison.
     "rapidfuzz>=3.0",
+    # Symscan.py: the default annotate backend for exact, Hamming and
+    # Levenshtein matching (a Rust symmetric-deletion index; numpy, which it
+    # returns its pairs in, comes with it and with pandas).
+    "symscan>=0.8",
 ]
 
 [project.optional-dependencies]

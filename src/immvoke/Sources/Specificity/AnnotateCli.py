@@ -27,11 +27,18 @@ import pandas
 # Immvoke imports
 from immvoke.Commandline import CommonHelpFormatter
 from immvoke.Exceptions import AnnotationError
-from immvoke.Sources.Specificity.Annotate import (DEFAULT_ID_COL, HEAVY_LOCUS,
-                                                    runExactAnnotation,
-                                                    runFuzzyAnnotation,
-                                                    runLevenshteinAnnotation,
-                                                    runPairedExactAnnotation)
+from immvoke.Sources.Specificity.Annotate import (
+    DEFAULT_ID_COL,
+    HEAVY_LOCUS,
+    runExactAnnotation,
+    runFuzzyAnnotation,
+    runLevenshteinAnnotation,
+    runPairedExactAnnotation,
+)
+from immvoke.Sources.Specificity.Symscan import (
+    runSymscanAnnotation,
+    runSymscanExactAnnotation,
+)
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +46,13 @@ log = logging.getLogger(__name__)
 #: exactly; only --compare-cols (e.g. cdr3_aa) gets any substitution tolerance.
 #: Matches runPairedExactAnnotation's own vgene_col/jgene_col defaults.
 FUZZY_EXACT_COLS = ['v_call', 'j_call']
+
+#: --backend choices: symscan runs every mode; compairr only the exact ones
+#: (--exact, --paired), python only the tolerant ones (--fuzzy, --identity,
+#: --levenshtein).
+BACKENDS = ('symscan', 'compairr', 'python')
+EXACT_BACKENDS = ('symscan', 'compairr')
+FUZZY_BACKENDS = ('symscan', 'python')
 
 
 def addAnnotateParser(commands):
@@ -80,16 +94,13 @@ def addAnnotateParser(commands):
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--exact', action='store_true',
                       help='require exact agreement on a single '
-                           '--compare-cols column (the default): '
-                           'CompAIRR-backed')
+                           '--compare-cols column (the default)')
     mode.add_argument('--fuzzy', type=int, default=None, metavar='N',
                       help='exact V-gene and J-gene agreement (v_call, '
                            'j_call), plus up to N substitutions on '
-                           '--compare-cols (pooled if more than one column); '
-                           'pure Python, no CompAIRR. Restricted to the '
-                           'heavy chain (locus IGH) to bound its cost, which '
-                           'grows with candidate pool size unlike --exact\'s '
-                           'hashed lookup; --locus must be IGH or left unset')
+                           '--compare-cols (pooled if more than one column). '
+                           'Restricted to the heavy chain (locus IGH); '
+                           '--locus must be IGH or left unset')
     mode.add_argument('--identity', type=float, default=None, metavar='PCT',
                       help='same as --fuzzy, but the substitution tolerance '
                            'is expressed as a percent identity over the '
@@ -104,9 +115,8 @@ def addAnnotateParser(commands):
                            'j_call), plus up to N substitutions, insertions '
                            'and deletions combined on a single --compare-cols '
                            'column -- indel-tolerant, unlike --fuzzy/'
-                           '--identity (substitutions only). Pure Python '
-                           '(rapidfuzz), no CompAIRR; restricted to the '
-                           'heavy chain same as --fuzzy; does not pool '
+                           '--identity (substitutions only). Restricted to '
+                           'the heavy chain same as --fuzzy; does not pool '
                            'across multiple --compare-cols and has no \'X\' '
                            'wildcard handling')
     mode.add_argument('--paired', action='store_true',
@@ -131,12 +141,25 @@ def addAnnotateParser(commands):
                         metavar='COLUMN',
                         help='--exact only: column to require exact J-gene '
                              'agreement on')
+    parser.add_argument('--backend', choices=BACKENDS, default='symscan',
+                        help='matching engine. symscan runs every mode; '
+                             'compairr (an external binary) only --exact/'
+                             '--paired; python only --fuzzy/--identity/'
+                             '--levenshtein. All give the same result; '
+                             'rows symscan cannot index (an \'X\' wildcard, '
+                             'a tolerance above 14, or very long sequences '
+                             'at a high tolerance) are compared in Python '
+                             'automatically')
     parser.add_argument('--compairr-bin', default=None, dest='compairr_bin',
                         metavar='PATH',
-                        help='--exact/--paired only: path to the compairr '
+                        help='--backend compairr only: path to the compairr '
                              'binary; without it, PATH is searched')
     parser.add_argument('--threads', type=int, default=1,
-                        help='--exact/--paired only: compairr threads to use')
+                        help='threads to use: compairr\'s own -t under '
+                             '--backend compairr, symscan\'s thread pool '
+                             'under --backend symscan (-1 for every core; '
+                             'only the first symscan run in a process sets '
+                             'it); the python backend is single threaded')
     parser.add_argument('--id-col', default=DEFAULT_ID_COL, dest='id_col',
                         metavar='COLUMN',
                         help='column in --reference to report as each '
@@ -188,6 +211,23 @@ def _filterByLocus(frame, locus, label):
     return filtered
 
 
+def _checkBackend(backend, allowed, mode):
+    """
+    Refuse a --backend that cannot run the requested mode.
+
+    Arguments:
+      backend (str): the requested --backend.
+      allowed (tuple): the backends that can run `mode`.
+      mode (str): the mode flag(s), for the error message only.
+
+    Raises:
+      AnnotationError: if `backend` is not in `allowed`.
+    """
+    if backend not in allowed:
+        raise AnnotationError('--backend %s does not run %s; choose one of: %s'
+                              % (backend, mode, ', '.join(allowed)))
+
+
 def handleAnnotate(args):
     """
     Read --query and --reference, run the requested annotation, and write
@@ -201,11 +241,13 @@ def handleAnnotate(args):
       int: process exit status.
     """
     if args.paired:
+        _checkBackend(args.backend, EXACT_BACKENDS, '--paired')
         queries = _readAirrTsv(args.query)
         reference = _readAirrTsv(args.reference)
         result = runPairedExactAnnotation(queries, reference,
                                           compairr_bin=args.compairr_bin,
-                                          threads=args.threads)
+                                          threads=args.threads,
+                                          backend=args.backend)
         log.info('%d query antibodies: %s', len(result),
                  ', '.join('%s=%d' % (label, count) for label, count
                           in result['classification'].value_counts().items()))
@@ -213,11 +255,13 @@ def handleAnnotate(args):
         fuzzy_family = (args.fuzzy is not None or args.identity is not None
                         or args.levenshtein is not None)
         if fuzzy_family:
-            # Every pure-Python path (fuzzy, identity, levenshtein) has a cost
-            # that grows with candidate pool size, unlike --exact's hashed
-            # CompAIRR lookup -- restricting to the heavy chain keeps that
-            # cost bounded rather than doubling it (or worse) by also
-            # scanning the light chain.
+            _checkBackend(args.backend, FUZZY_BACKENDS,
+                          '--fuzzy/--identity/--levenshtein')
+            # The python backend's cost (fuzzy, identity, levenshtein) grows
+            # with candidate pool size -- restricting to the heavy chain keeps
+            # that cost bounded rather than doubling it (or worse) by also
+            # scanning the light chain. symscan follows the same rule, so the
+            # result never depends on which backend ran.
             if args.locus not in (None, HEAVY_LOCUS):
                 raise AnnotationError(
                     "--fuzzy/--identity/--levenshtein are restricted to the "
@@ -225,6 +269,7 @@ def handleAnnotate(args):
                     "'%s'" % (HEAVY_LOCUS, args.locus))
             locus = HEAVY_LOCUS
         else:
+            _checkBackend(args.backend, EXACT_BACKENDS, '--exact')
             locus = args.locus
 
         queries = _filterByLocus(_readAirrTsv(args.query), locus, 'query')
@@ -242,39 +287,70 @@ def handleAnnotate(args):
                 raise AnnotationError(
                     '--identity is a percent identity in (0, 100); got %s. '
                     'Use --exact for 100%% identity.' % args.identity)
-            result = runFuzzyAnnotation(queries, reference, args.compare_cols,
-                                        (100 - args.identity) / 100,
-                                        id_col=args.id_col,
-                                        exact_cols=FUZZY_EXACT_COLS,
-                                        threshold_is_fraction=True)
+            fraction = (100 - args.identity) / 100
+            if args.backend == 'symscan':
+                result = runSymscanAnnotation(queries, reference, args.compare_cols,
+                                              fraction, distance_type='hamming',
+                                              id_col=args.id_col,
+                                              exact_cols=FUZZY_EXACT_COLS,
+                                              threshold_is_fraction=True,
+                                              threads=args.threads)
+            else:
+                result = runFuzzyAnnotation(queries, reference, args.compare_cols,
+                                            fraction, id_col=args.id_col,
+                                            exact_cols=FUZZY_EXACT_COLS,
+                                            threshold_is_fraction=True)
         elif args.fuzzy is not None:
-            result = runFuzzyAnnotation(queries, reference, args.compare_cols,
-                                        args.fuzzy, id_col=args.id_col,
-                                        exact_cols=FUZZY_EXACT_COLS)
+            if args.backend == 'symscan':
+                result = runSymscanAnnotation(queries, reference, args.compare_cols,
+                                              args.fuzzy, distance_type='hamming',
+                                              id_col=args.id_col,
+                                              exact_cols=FUZZY_EXACT_COLS,
+                                              threads=args.threads)
+            else:
+                result = runFuzzyAnnotation(queries, reference, args.compare_cols,
+                                            args.fuzzy, id_col=args.id_col,
+                                            exact_cols=FUZZY_EXACT_COLS)
         elif args.levenshtein is not None:
             if len(args.compare_cols) != 1:
                 raise AnnotationError(
                     '--levenshtein compares exactly one column; got %d via '
                     '--compare-cols (%s).'
                     % (len(args.compare_cols), ', '.join(args.compare_cols)))
-            result = runLevenshteinAnnotation(queries, reference,
-                                              args.compare_cols[0],
+            if args.backend == 'symscan':
+                result = runSymscanAnnotation(queries, reference, args.compare_cols,
                                               args.levenshtein,
+                                              distance_type='levenshtein',
                                               id_col=args.id_col,
-                                              exact_cols=FUZZY_EXACT_COLS)
+                                              exact_cols=FUZZY_EXACT_COLS,
+                                              threads=args.threads)
+            else:
+                result = runLevenshteinAnnotation(queries, reference,
+                                                  args.compare_cols[0],
+                                                  args.levenshtein,
+                                                  id_col=args.id_col,
+                                                  exact_cols=FUZZY_EXACT_COLS)
         else:
             if len(args.compare_cols) != 1:
                 raise AnnotationError(
-                    'exact annotation (CompAIRR-backed) compares exactly one '
-                    'column; got %d via --compare-cols (%s). Use --fuzzy N '
-                    'for multi-column pooled annotation instead.'
+                    'exact annotation compares exactly one column; got %d via '
+                    '--compare-cols (%s). Use --fuzzy N for multi-column '
+                    'pooled annotation instead.'
                     % (len(args.compare_cols), ', '.join(args.compare_cols)))
-            result = runExactAnnotation(queries, reference, args.compare_cols[0],
-                                        id_col=args.id_col,
-                                        vgene_col=args.vgene_col,
-                                        jgene_col=args.jgene_col,
-                                        compairr_bin=args.compairr_bin,
-                                        threads=args.threads)
+            if args.backend == 'symscan':
+                result = runSymscanExactAnnotation(queries, reference,
+                                                   args.compare_cols[0],
+                                                   id_col=args.id_col,
+                                                   vgene_col=args.vgene_col,
+                                                   jgene_col=args.jgene_col,
+                                                   threads=args.threads)
+            else:
+                result = runExactAnnotation(queries, reference, args.compare_cols[0],
+                                            id_col=args.id_col,
+                                            vgene_col=args.vgene_col,
+                                            jgene_col=args.jgene_col,
+                                            compairr_bin=args.compairr_bin,
+                                            threads=args.threads)
 
         hit = int(result['n_hits_total'].gt(0).sum())
         log.info('%d query rows, %d with at least one hit, %d unique (0 or 1 hit)',

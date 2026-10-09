@@ -34,30 +34,22 @@ which reference rows it matches. One flag picks the criterion:
 
 | Flag | Criterion | `--compare-cols` |
 | --- | --- | --- |
-| `--exact` (default) | byte-identical, CompAIRR-backed, optional V/J-gene gate | one |
+| `--exact` (default) | byte-identical, optional V/J-gene gate | one |
 | `--fuzzy N` | exact V+J gene, up to N substitutions | one or more, pooled |
 | `--identity PCT` | same as `--fuzzy`, tolerance expressed as percent identity instead of a count | one or more, pooled |
 | `--levenshtein N` | exact V+J gene, up to N substitutions/insertions/deletions | exactly one |
 | `--paired` | exact V-gene, J-gene and CDR3 on *both* chains of the same reference antibody | fixed (`cdr3_aa`) |
 
-`--fuzzy`, `--identity` and `--levenshtein` are pure Python, always gate on
-exact V-gene and J-gene agreement, and are always restricted to the heavy
-chain -- `--locus` may only be left unset or set to `IGH` under any of them.
-None of that is optional, since their cost grows with the candidate pool
-(unlike `--exact`'s hashed CompAIRR lookup) and limiting to one chain keeps
-it bounded. `--levenshtein` is the odd one out among the three: it tolerates
+`--fuzzy`, `--identity` and `--levenshtein` always gate on exact V-gene and
+J-gene agreement, and are always restricted to the heavy chain -- `--locus`
+may only be left unset or set to `IGH` under any of them. None of that is
+optional. `--levenshtein` is the odd one out among the three: it tolerates
 insertions/deletions, not just substitutions, and for that reason only ever
 takes a single `--compare-cols` column -- edit distance doesn't pool across
 columns the way Hamming distance does.
 
-`--exact` runs through [CompAIRR](https://github.com/uio-bmi/compairr),
-which has to be built from source and put on `PATH` (or pointed at with
-`--compairr-bin`). CompAIRR has no concept of the `X` wildcard for an
-unresolved residue and errors on a blank sequence, so such rows are compared
-in Python instead, where `X` matches anything.
-
 `bcr.tsv` is one row per chain, not per antibody: `--exact` matches heavy
-and light as two separate calls via `--locus`; the pure-Python modes filter
+and light as two separate calls via `--locus`; the tolerant modes filter
 to `IGH` on their own.
 
 ```bash
@@ -115,6 +107,36 @@ One row per query antibody (`cell_id`), classified as `both`, `heavy_only`,
 `light_only`, `conflicting` (heavy and light each hit, but different
 reference antibodies), or `neither`, alongside `heavy_hit_ids`,
 `light_hit_ids` and `both_hit_ids` (their intersection).
+
+### Backends
+
+Every mode runs through [symscan](https://github.com/yutanagano/symscan) by
+default (`--backend symscan`): a symmetric-deletion index that only ever
+looks at likely matches instead of scoring every query x reference pair.
+Two alternatives give the same result, and are kept as a fallback and for
+comparison:
+
+| `--backend` | Runs | Notes |
+| --- | --- | --- |
+| `symscan` (default) | every mode | tolerance of at most 14; `--threads -1` for every core |
+| `compairr` | `--exact`, `--paired` | [CompAIRR](https://github.com/uio-bmi/compairr) binary, built from source and put on `PATH` (or pointed at with `--compairr-bin`) |
+| `python` | `--fuzzy`, `--identity`, `--levenshtein` | single threaded; cost grows with the candidate pool |
+
+Neither symscan nor CompAIRR has a concept of the `X` wildcard for an
+unresolved residue, so under exact and Hamming matching the rows that carry
+one are compared in Python instead, where `X` matches anything; every other
+row still goes through the faster engine.
+
+symscan indexes every deletion variant of every sequence -- a number that
+grows steeply with the tolerance and the sequence length -- and aborts the
+process above an edit distance of 14 or once that index outgrows memory.
+`immvoke annotate` sizes each symscan call to stay within a fixed budget,
+and compares whatever doesn't fit (a tolerance above 14, or very long
+sequences at a high tolerance) in Python instead, with a warning. Because
+that cost grows with the tolerance, a high one (e.g. `--identity 70` on
+CDR3s) can run much faster with `--backend python`, whose V/J/length
+bucketing doesn't depend on it; symscan's advantage is at low tolerances
+on large tables.
 
 Reference command: `immvoke specificity bcr --help`,
 `immvoke annotate --help`.

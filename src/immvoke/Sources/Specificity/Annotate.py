@@ -20,11 +20,17 @@ Three ways to decide a hit today:
                               substitutions/insertions/deletions combined,
                               pure Python (rapidfuzz)
 
-runPairedExactAnnotation builds on runExactAnnotation for the case where a
+runPairedExactAnnotation builds on the exact criterion for the case where a
 query row is one chain of an antibody rather than a self-contained unit: it
-runs the exact criterion once per chain (heavy, light) and reconciles the
-two per antibody, classifying each as agreeing with the same reference
-antibody on both chains, one chain only, or neither.
+runs it once per chain (heavy, light) and reconciles the two per antibody,
+classifying each as agreeing with the same reference antibody on both
+chains, one chain only, or neither.
+
+Symscan.py runs the same three criteria through symscan's
+symmetric-deletion index instead, returning the same result tables; it is
+the default engine for `immvoke annotate`, and the functions here remain
+the fallback (`--backend compairr`/`--backend python`), and the reference
+behaviour Symscan.py is tested against.
 
 runExactAnnotation requires the compairr binary
 (https://github.com/uio-bmi/compairr, Rognes et al. 2022, Bioinformatics),
@@ -86,6 +92,24 @@ CELL_ID_COL = 'cell_id'
 LOCUS_COL = 'locus'
 HEAVY_LOCUS = 'IGH'
 LIGHT_LOCI = ('IGK', 'IGL')
+
+#: Slack added before truncating a fraction-of-length threshold to a count,
+#: so float error can't drop it by one (e.g. (1 - 0.9) * 10 is 0.99999...).
+_FRACTION_EPSILON = 1e-9
+
+
+def _allowedDifferences(fraction, length):
+    """
+    Resolve a fraction-of-length tolerance to a whole number of differences.
+
+    Arguments:
+      fraction (float): the tolerated fraction, e.g. 0.1.
+      length (int): the query's length the fraction applies to.
+
+    Returns:
+      int: floor(fraction * length), robust to float representation error.
+    """
+    return int(fraction * length + _FRACTION_EPSILON)
 
 
 def _valueDistance(a, b):
@@ -182,6 +206,21 @@ def _rowValues(frame, columns):
     return list(frame[columns].fillna('').itertuples(index=False, name=None))
 
 
+def _exactValues(frame, exact_cols):
+    """
+    _rowValues for the exact-agreement gate, or one empty tuple per row when
+    there is no gate.
+
+    Arguments:
+      frame (pandas.DataFrame): the table to read from.
+      exact_cols (list): column names, or None.
+
+    Returns:
+      list: one tuple per row.
+    """
+    return _rowValues(frame, exact_cols) if exact_cols else [()] * len(frame)
+
+
 def _bucketKey(row_values, exact_values):
     """
     Build the index bucket a row belongs to.
@@ -270,8 +309,9 @@ def runFuzzyAnnotation(queries, reference, compare_cols, max_mismatches,
     rows = []
     for query_row, (row_values, row_exact) in enumerate(zip(values, exact_values)):
         candidates = index.get(_bucketKey(row_values, row_exact), [])
-        max_distance = (int(max_mismatches * sum(len(v) for v in row_values))
-                       if threshold_is_fraction else max_mismatches)
+        max_distance = (_allowedDifferences(max_mismatches,
+                                            sum(len(v) for v in row_values))
+                        if threshold_is_fraction else max_mismatches)
 
         best_by_id = {}
         for cand_values, row_id in candidates:
@@ -586,7 +626,7 @@ def _hitsByCellId(query_chain, chain_result, cell_id_col):
 
 def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
                              vgene_col='v_call', jgene_col='j_call',
-                             compairr_bin=None, threads=1):
+                             compairr_bin=None, threads=1, backend='symscan'):
     """
     Classify each query antibody by whether the *same* reference antibody
     agrees with it on the heavy chain, the light chain, both, or neither.
@@ -610,8 +650,12 @@ def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
       vgene_col (str): the V-gene call column.
       jgene_col (str): the J-gene call column.
       compairr_bin (str): path to the compairr binary, or None to search
-        PATH.
-      threads (int): compairr's own `-t`; see runExactAnnotation.
+        PATH. Only used under backend='compairr'.
+      threads (int): compairr's own `-t`, or symscan's thread pool; see
+        runExactAnnotation and Symscan.runSymscanAnnotation.
+      backend (str): 'symscan' (Symscan.runSymscanExactAnnotation) or
+        'compairr' (runExactAnnotation) -- the engine behind each chain's
+        exact match; the result is the same either way.
 
     Returns:
       pandas.DataFrame: one row per query `cell_id`: `classification` (one
@@ -630,14 +674,26 @@ def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
     reference_heavy = reference_heavy.reset_index(drop=True)
     reference_light = reference_light.reset_index(drop=True)
 
-    heavy_result = runExactAnnotation(query_heavy, reference_heavy, cdr3_col,
+    if backend == 'symscan':
+        # Deferred: Symscan builds on this module's helpers.
+        from immvoke.Sources.Specificity.Symscan import runSymscanExactAnnotation
+
+        def _exact(query_chain, reference_chain):
+            return runSymscanExactAnnotation(query_chain, reference_chain, cdr3_col,
+                                             id_col=CELL_ID_COL, vgene_col=vgene_col,
+                                             jgene_col=jgene_col, threads=threads)
+    elif backend == 'compairr':
+        def _exact(query_chain, reference_chain):
+            return runExactAnnotation(query_chain, reference_chain, cdr3_col,
                                       id_col=CELL_ID_COL, vgene_col=vgene_col,
                                       jgene_col=jgene_col,
                                       compairr_bin=compairr_bin, threads=threads)
-    light_result = runExactAnnotation(query_light, reference_light, cdr3_col,
-                                      id_col=CELL_ID_COL, vgene_col=vgene_col,
-                                      jgene_col=jgene_col,
-                                      compairr_bin=compairr_bin, threads=threads)
+    else:
+        raise AnnotationError("unknown backend %r for paired annotation; choose "
+                              "'symscan' or 'compairr'" % (backend,))
+
+    heavy_result = _exact(query_heavy, reference_heavy)
+    light_result = _exact(query_light, reference_light)
 
     heavy_hits = _hitsByCellId(query_heavy, heavy_result, CELL_ID_COL)
     light_hits = _hitsByCellId(query_light, light_result, CELL_ID_COL)

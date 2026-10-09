@@ -18,10 +18,12 @@ import pandas
 # Immvoke imports
 from immvoke.Cli import getArgParser
 from immvoke.Exceptions import AnnotationError
-from immvoke.Sources.Specificity.Annotate import (runExactAnnotation,
-                                                    runFuzzyAnnotation,
-                                                    runLevenshteinAnnotation,
-                                                    runPairedExactAnnotation)
+from immvoke.Sources.Specificity.Annotate import (
+    runExactAnnotation,
+    runFuzzyAnnotation,
+    runLevenshteinAnnotation,
+    runPairedExactAnnotation,
+)
 from immvoke.Sources.Specificity.AnnotateCli import handleAnnotate
 
 
@@ -311,7 +313,7 @@ class TestRunPairedExactAnnotation(unittest.TestCase):
 
         with mock.patch('shutil.which', return_value='/usr/bin/compairr'), \
              mock.patch('subprocess.run', side_effect=fakeCompairrExact):
-            result = runPairedExactAnnotation(queries, reference)
+            result = runPairedExactAnnotation(queries, reference, backend='compairr')
 
         by_cell_id = result.set_index('cell_id')['classification'].to_dict()
         self.assertEqual(by_cell_id, {
@@ -324,7 +326,7 @@ class TestRunPairedExactAnnotation(unittest.TestCase):
 
         with mock.patch('shutil.which', return_value='/usr/bin/compairr'), \
              mock.patch('subprocess.run', side_effect=fakeCompairrExact):
-            result = runPairedExactAnnotation(queries, reference)
+            result = runPairedExactAnnotation(queries, reference, backend='compairr')
 
         row = result.set_index('cell_id').loc['q1']
         self.assertEqual(row['heavy_hit_ids'], 'refA')
@@ -335,6 +337,23 @@ class TestRunPairedExactAnnotation(unittest.TestCase):
         self.assertEqual(row5['heavy_hit_ids'], 'refA')
         self.assertEqual(row5['light_hit_ids'], 'refB')
         self.assertEqual(row5['both_hit_ids'], '')
+
+    def test_symscan_backend_gives_the_same_result_without_compairr(self):
+        queries, reference = self._antibodies()
+
+        with mock.patch('shutil.which', return_value='/usr/bin/compairr'), \
+             mock.patch('subprocess.run', side_effect=fakeCompairrExact):
+            expected = runPairedExactAnnotation(queries, reference, backend='compairr')
+        with mock.patch('subprocess.run', side_effect=noCompairrCallAllowed):
+            result = runPairedExactAnnotation(queries, reference)
+
+        pandas.testing.assert_frame_equal(result, expected)
+
+    def test_unknown_backend_raises(self):
+        queries, reference = self._antibodies()
+
+        with self.assertRaises(AnnotationError):
+            runPairedExactAnnotation(queries, reference, backend='python')
 
 
 class TestRunLevenshteinAnnotation(unittest.TestCase):
@@ -420,6 +439,13 @@ class TestAnnotateCliParser(unittest.TestCase):
         self.assertIn('--paired', text)
         self.assertIn('--vgene-col', text)
         self.assertIn('--compairr-bin', text)
+        self.assertIn('--backend', text)
+
+    def test_backend_defaults_to_symscan(self):
+        parser = getArgParser()
+        args = parser.parse_args(['annotate', '--query', 'q.tsv', '--reference',
+                                  'r.tsv', '--compare-cols', 'cdr3_aa', '-o', 'o.tsv'])
+        self.assertEqual(args.backend, 'symscan')
 
     def test_exact_fuzzy_paired_are_mutually_exclusive(self):
         parser = getArgParser()
@@ -448,7 +474,7 @@ class TestHandleAnnotate(unittest.TestCase):
         defaults = dict(compare_cols=['cdr3_aa'], fuzzy=None, identity=None,
                         levenshtein=None, paired=False, id_col='sequence_id',
                         vgene_col=None, jgene_col=None, compairr_bin=None,
-                        threads=1, locus=None)
+                        threads=1, locus=None, backend='symscan')
         defaults.update(overrides)
         return Namespace(**defaults)
 
@@ -467,11 +493,35 @@ class TestHandleAnnotate(unittest.TestCase):
             with mock.patch('shutil.which', return_value='/usr/bin/compairr'), \
                  mock.patch('subprocess.run', side_effect=fakeCompairrRun(pairs)):
                 status = handleAnnotate(self._baseArgs(
-                    query=query_path, reference=reference_path, out=out_path))
+                    query=query_path, reference=reference_path, out=out_path,
+                    backend='compairr'))
 
             self.assertEqual(status, 0)
             written = pandas.read_csv(out_path, sep='\t')
             self.assertEqual(written['hit_ids'].tolist(), ['ref1'])
+
+    def test_exact_annotation_defaults_to_symscan_without_compairr(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            query_path = tmp / 'query.tsv'
+            reference_path = tmp / 'reference.tsv'
+            out_path = tmp / 'out.tsv'
+
+            self._writeTsv(query_path, [{'sequence_id': 'q1', 'cdr3_aa': 'CARDYW'},
+                                        {'sequence_id': 'q2', 'cdr3_aa': 'CARDYY'}])
+            self._writeTsv(reference_path,
+                           [{'sequence_id': 'ref1', 'cdr3_aa': 'CARDYW'}])
+
+            with mock.patch('shutil.which', return_value=None), \
+                 mock.patch('subprocess.run', side_effect=noCompairrCallAllowed):
+                status = handleAnnotate(self._baseArgs(
+                    query=query_path, reference=reference_path, out=out_path))
+
+            self.assertEqual(status, 0)
+            written = pandas.read_csv(out_path, sep='\t', keep_default_na=False)
+            self.assertEqual(written.columns.tolist(),
+                             ['query_row', 'n_hits_total', 'is_unique_hit', 'hit_ids'])
+            self.assertEqual(written['hit_ids'].tolist(), ['ref1', ''])
 
     def test_exact_annotation_rejects_more_than_one_compare_col(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -578,7 +628,7 @@ class TestHandleAnnotate(unittest.TestCase):
                  mock.patch('subprocess.run', side_effect=fakeCompairrRun(pairs)):
                 handleAnnotate(self._baseArgs(
                     query=query_path, reference=reference_path, out=out_path,
-                    locus='IGH'))
+                    locus='IGH', backend='compairr'))
 
             written = pandas.read_csv(out_path, sep='\t')
             # Only the IGH row of the query survives the filter.
@@ -716,9 +766,91 @@ class TestHandleAnnotate(unittest.TestCase):
                  mock.patch('subprocess.run', side_effect=fakeCompairrExact):
                 status = handleAnnotate(self._baseArgs(
                     query=query_path, reference=reference_path, out=out_path,
-                    paired=True, compare_cols=None))
+                    paired=True, compare_cols=None, backend='compairr'))
 
             self.assertEqual(status, 0)
             written = pandas.read_csv(out_path, sep='\t')
             self.assertEqual(written['classification'].tolist(), ['both'])
             self.assertEqual(written['both_hit_ids'].tolist(), ['ref1'])
+
+            with mock.patch('subprocess.run', side_effect=noCompairrCallAllowed):
+                handleAnnotate(self._baseArgs(
+                    query=query_path, reference=reference_path, out=out_path,
+                    paired=True, compare_cols=None))
+
+            written = pandas.read_csv(out_path, sep='\t')
+            self.assertEqual(written['classification'].tolist(), ['both'])
+
+    def _writeHeavyPair(self, tmp, query_cdr3='CARDYW', reference_cdr3='CARQYW'):
+        query_path = tmp / 'query.tsv'
+        reference_path = tmp / 'reference.tsv'
+        self._writeTsv(query_path, [{'sequence_id': 'q1', 'locus': 'IGH',
+                                    'cdr3_aa': query_cdr3, 'v_call': 'IGHV1',
+                                    'j_call': 'IGHJ1'}])
+        self._writeTsv(reference_path, [{'sequence_id': 'ref1', 'locus': 'IGH',
+                                        'cdr3_aa': reference_cdr3, 'v_call': 'IGHV1',
+                                        'j_call': 'IGHJ1'}])
+        return query_path, reference_path
+
+    def test_tolerant_modes_default_to_symscan(self):
+        for mode in ({'fuzzy': 1}, {'identity': 80}, {'levenshtein': 1}):
+            with self.subTest(**mode), tempfile.TemporaryDirectory() as tmp:
+                tmp = Path(tmp)
+                query_path, reference_path = self._writeHeavyPair(tmp)
+
+                with mock.patch('immvoke.Sources.Specificity.AnnotateCli.'
+                                'runFuzzyAnnotation', side_effect=AssertionError), \
+                     mock.patch('immvoke.Sources.Specificity.AnnotateCli.'
+                                'runLevenshteinAnnotation', side_effect=AssertionError):
+                    handleAnnotate(self._baseArgs(
+                        query=query_path, reference=reference_path,
+                        out=tmp / 'out.tsv', **mode))
+
+                written = pandas.read_csv(tmp / 'out.tsv', sep='\t')
+                self.assertEqual(written['hit_ids'].tolist(), ['ref1'])
+
+    def test_python_backend_skips_symscan(self):
+        for mode in ({'fuzzy': 1}, {'identity': 80}, {'levenshtein': 1}):
+            with self.subTest(**mode), tempfile.TemporaryDirectory() as tmp:
+                tmp = Path(tmp)
+                query_path, reference_path = self._writeHeavyPair(tmp)
+
+                with mock.patch('immvoke.Sources.Specificity.AnnotateCli.'
+                                'runSymscanAnnotation', side_effect=AssertionError):
+                    handleAnnotate(self._baseArgs(
+                        query=query_path, reference=reference_path,
+                        out=tmp / 'out.tsv', backend='python', **mode))
+
+                written = pandas.read_csv(tmp / 'out.tsv', sep='\t')
+                self.assertEqual(written['hit_ids'].tolist(), ['ref1'])
+
+    def test_a_tolerance_beyond_symscan_still_runs_by_default(self):
+        """symscan aborts the process above distance 14; that comparison
+        must run in Python rather than ever reaching it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            query_path, reference_path = self._writeHeavyPair(tmp)
+
+            with mock.patch('symscan.get_neighbors_across',
+                            side_effect=AssertionError):
+                handleAnnotate(self._baseArgs(
+                    query=query_path, reference=reference_path,
+                    out=tmp / 'out.tsv', fuzzy=20))
+
+            written = pandas.read_csv(tmp / 'out.tsv', sep='\t')
+            self.assertEqual(written['hit_ids'].tolist(), ['ref1'])
+
+    def test_a_backend_that_cannot_run_the_mode_raises(self):
+        cases = [({'backend': 'python'}, 'exact'),
+                 ({'backend': 'python', 'paired': True, 'compare_cols': None}, 'paired'),
+                 ({'backend': 'compairr', 'fuzzy': 1}, 'fuzzy'),
+                 ({'backend': 'compairr', 'levenshtein': 1}, 'levenshtein')]
+        for overrides, label in cases:
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp:
+                tmp = Path(tmp)
+                query_path, reference_path = self._writeHeavyPair(tmp)
+
+                with self.assertRaises(AnnotationError):
+                    handleAnnotate(self._baseArgs(
+                        query=query_path, reference=reference_path,
+                        out=tmp / 'out.tsv', **overrides))

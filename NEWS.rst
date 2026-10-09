@@ -1,6 +1,28 @@
 Release Notes
 ================================================================================
 
+Unreleased
+-------------------------------------------------------------------------------
+
+Specificity:
+
++ Added specificity databases IEDB_, CoV-AbDab_ and ASD_ under
+  ``immvoke specificity <db> search|download``, and ``immvoke specificity
+  bcr`` as a shortcut for IEDB's BCR table, downloaded as a schema-validated
+  AIRR rearrangement TSV with one record per chain, linked by ``cell_id``.
++ Added ``immvoke annotate``, to annotate a query AIRR table against a
+  reference one (e.g. IEDB's BCR table): exact (``--exact``), substitution
+  tolerant (``--fuzzy``, ``--identity``), indel tolerant (``--levenshtein``)
+  and paired heavy+light (``--paired``) matching.
++ ``immvoke annotate`` runs every mode through symscan_ by default; CompAIRR
+  (``--backend compairr``, exact modes) and pure Python (``--backend python``,
+  tolerant modes) remain available and give the same result.
+
+.. _IEDB: https://www.iedb.org/
+.. _CoV-AbDab: https://opig.stats.ox.ac.uk/webapps/covabdab/
+.. _ASD: https://naturalantibody.com/agab/
+.. _symscan: https://github.com/yutanagano/symscan
+
 Version 0.1.0: 2026.09.28
 -------------------------------------------------------------------------------
 
