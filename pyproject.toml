@@ -39,8 +39,10 @@ dependencies = [
     "tqdm>=4.64",
     # ASD's data unit is a Delta Lake of Parquet partitions, staged in a
     # Google Drive folder: pyarrow reads the partitions, gdown fetches the
-    # folder, since it has no plain HTTP download.
-    "pyarrow>=14",
+    # folder, since it has no plain HTTP download. The floor is 16 for the
+    # same reason as the pandas floor above: pyarrow wheels before 16 were
+    # built against numpy 1.x and fail to import under numpy>=2.
+    "pyarrow>=16",
     "gdown>=5.0",
     # runLevenshteinAnnotation uses rapidfuzz.distance.Levenshtein for
     # indel-tolerant (substitution + insertion + deletion) sequence comparison.
