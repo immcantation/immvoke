@@ -43,3 +43,28 @@ The two paired fixtures are both required. They are **not** the same schema:
 only the 180 column file would leave the common case uncovered. The
 `csv_paired/` fixture also has no run accession in its filename, which is what
 pins the rule that unit identifiers are opaque.
+
+## IMGT
+
+Derived from the live IMGT/GENE-DB GENElect service on **2026-08-06**. IMGT data
+is subject to the IMGT terms of use (<https://www.imgt.org/about/termsofuse.php>)
+and its use requires citing IMGT, the international ImMunoGeneTics information
+system (Lefranc MP et al., *Nucleic Acids Res.* 2015). The excerpts are trimmed to
+the smallest form that exercises the parser.
+
+| File | Content |
+|---|---|
+| `imgt_ighd.html` | A GENElect reply reduced to its two `<pre>` blocks — the query echo and three real human IGHD records — so `extractFasta` reads the second block. |
+| `imgt_error.html` | A hand-written stand-in for an IMGT error page: HTTP 200 with a single `<pre>` and no FASTA, which is why validity cannot be the status code alone. |
+
+## OGRDB
+
+Trimmed from the live OGRDB `api_v2` human `IGKappa_VJ` set on **2026-08-06**.
+OGRDB data is distributed under **CC BY 4.0**; cite Lees WD et al., *Nucleic Acids
+Res.* 2020. Both forms of the same set are kept because the segment split reads V
+from one and J from the other.
+
+| File | Content |
+|---|---|
+| `ogrdb_igk_ungapped.fasta` | Two IGKV and two IGKJ alleles, ungapped. J is taken from here. |
+| `ogrdb_igk_gapped.fasta` | The same alleles IMGT-gapped; the IGKV records carry `.` gaps. V is taken from here, which is what keeps its numbering. |

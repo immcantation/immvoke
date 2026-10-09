@@ -3,13 +3,16 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "sourcerer"
+name = "immvoke"
 dynamic = ["version"]
 description = "Download data from online immune repertoire databases and format it for Immcantation"
 readme = "README.rst"
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
-authors = [{name = "Susanna Marquez"}]
+authors = [
+    {name = "Susanna Marquez"},
+    {name = "Ayelet Peres"},
+]
 keywords = ["AIRR", "antibody", "repertoire", "immcantation", "OAS"]
 classifiers = [
     "Intended Audience :: Science/Research",
@@ -48,24 +51,24 @@ dependencies = [
 dev = ["ruff>=0.5"]
 
 [project.scripts]
-sourcerer = "sourcerer.Cli:main"
+immvoke = "immvoke.Cli:main"
 
 [project.urls]
 Homepage = "https://immcantation.readthedocs.io"
 
 [tool.hatch.version]
-path = "src/sourcerer/Version.py"
+path = "src/immvoke/Version.py"
 
 [tool.hatch.build.targets.wheel]
-# The schema snapshots under src/sourcerer/data are package data and ship
+# The schema snapshots under src/immvoke/data are package data and ship
 # automatically as part of the package. Do not add a force-include for them: it
 # duplicates every file and the build fails.
-packages = ["src/sourcerer"]
+packages = ["src/immvoke"]
 # Specificity's own tests live alongside its source
 # (Sources/Specificity/tests/) rather than under the top level tests/
 # directory; exclude them here so a built wheel still ships no test code,
-# matching every other source under src/sourcerer.
-exclude = ["src/sourcerer/Sources/Specificity/tests/*"]
+# matching every other source under src/immvoke.
+exclude = ["src/immvoke/Sources/Specificity/tests/*"]
 
 [tool.ruff]
 line-length = 90
@@ -84,4 +87,4 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["sourcerer"]
+known-first-party = ["immvoke"]

@@ -13,9 +13,15 @@ API
    modules/Catalog
    modules/Convert
    modules/Airrflow
+   modules/Reference
+   modules/Genedb
    modules/Provenance
    modules/Gzip
    modules/Exceptions
    modules/Sources
    modules/SourcesBase
+   modules/SourcesGermline
    modules/SourcesOas
+   modules/SourcesImgt
+   modules/SourcesOgrdb
+   modules/SourcesAirrcImgt
