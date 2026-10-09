@@ -17,8 +17,7 @@ from pathlib import Path
 import yaml
 
 # Immvoke imports
-from immvoke.Provenance import (DOWNLOAD_METADATA, METADATA_VERSION,
-                                  commandLine, timestamp)
+from immvoke.Provenance import DOWNLOAD_METADATA, METADATA_VERSION, commandLine, timestamp
 from immvoke.Version import __version__
 
 

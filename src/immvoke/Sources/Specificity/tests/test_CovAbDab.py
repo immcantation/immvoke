@@ -13,14 +13,17 @@ from pathlib import Path
 import pandas
 
 # Immvoke imports
-from immvoke.Schema import loadSchema
-from immvoke.Sources.Specificity import REGISTRY, getSpecificitySource
-from immvoke.Sources.Specificity.CovAbDab import (COLLECTION, HOME_URL,
-                                                     CovAbDabSource,
-                                                     findCsvUrl)
 from immvoke.Exceptions import CovAbDabParseError
 from immvoke.Http import HttpClient
+from immvoke.Schema import loadSchema
 from immvoke.Sources.Base import DataUnit, Query
+from immvoke.Sources.Specificity import REGISTRY, getSpecificitySource
+from immvoke.Sources.Specificity.CovAbDab import (
+    COLLECTION,
+    HOME_URL,
+    CovAbDabSource,
+    findCsvUrl,
+)
 from tests.FakeHttp import FakeResponse, FakeSession, rangeHandler
 
 

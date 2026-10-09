@@ -78,7 +78,11 @@ jobs:
           python -m pip install --upgrade pip build twine
           pip install .
       - name: Unit tests
-        run: python -m unittest discover -v
+        # Specificity keeps its tests beside its source (see pyproject.toml),
+        # where discovery from the top level does not reach.
+        run: |
+          python -m unittest discover -v
+          python -m unittest discover -v -s src/immvoke/Sources/Specificity/tests -t src
       - name: Build sdist and wheel
         run: python -m build
       - name: Check distribution metadata

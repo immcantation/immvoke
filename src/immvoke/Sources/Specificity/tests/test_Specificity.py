@@ -16,15 +16,20 @@ from pathlib import Path
 import pandas
 
 # Immvoke imports
-from immvoke.Sources.Specificity import REGISTRY, getSpecificitySource
-from immvoke.Sources.Specificity.Iedb import (_CHAIN_DIRECT, _CHAIN_EXTRA,
-                                                _CHAIN_PREFERRED,
-                                                _SHARED_COLUMNS, API_BASE,
-                                                BULK_URL, IedbSource)
-from immvoke.Sources.Specificity.Paginate import pageByRange
 from immvoke.Exceptions import HttpError, IedbParseError
 from immvoke.Http import HttpClient
 from immvoke.Sources.Base import DataUnit, Query
+from immvoke.Sources.Specificity import REGISTRY, getSpecificitySource
+from immvoke.Sources.Specificity.Iedb import (
+    _CHAIN_DIRECT,
+    _CHAIN_EXTRA,
+    _CHAIN_PREFERRED,
+    _SHARED_COLUMNS,
+    API_BASE,
+    BULK_URL,
+    IedbSource,
+)
+from immvoke.Sources.Specificity.Paginate import pageByRange
 from tests.FakeHttp import FakeResponse, FakeSession, rangeHandler
 
 

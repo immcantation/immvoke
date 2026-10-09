@@ -28,7 +28,11 @@ jobs:
       - name: Install package
         run: pip install .
       - name: Unit tests
-        run: python -m unittest discover -v
+        # Specificity keeps its tests beside its source (see pyproject.toml),
+        # where discovery from the top level does not reach.
+        run: |
+          python -m unittest discover -v
+          python -m unittest discover -v -s src/immvoke/Sources/Specificity/tests -t src
 
   python-versions:
     runs-on: ubuntu-latest
@@ -46,7 +50,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install .
       - name: Unit tests
-        run: python -m unittest discover -v
+        # Specificity keeps its tests beside its source (see pyproject.toml),
+        # where discovery from the top level does not reach.
+        run: |
+          python -m unittest discover -v
+          python -m unittest discover -v -s src/immvoke/Sources/Specificity/tests -t src
 
   # Proves that the packaged schema snapshots and the runtime dependencies both
   # ship in the wheel. Running from /tmp guarantees the source tree cannot be

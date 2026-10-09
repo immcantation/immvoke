@@ -35,11 +35,11 @@ from pathlib import Path
 import pandas
 
 # Immvoke imports
-from immvoke.Sources.Specificity.Paginate import pageByRange
 from immvoke.Convert import coerceAirrTypes
 from immvoke.Exceptions import IedbParseError
 from immvoke.Http import hashFile
 from immvoke.Sources.Base import DataUnit, DownloadResult, SourceBase
+from immvoke.Sources.Specificity.Paginate import pageByRange
 
 log = logging.getLogger(__name__)
 
