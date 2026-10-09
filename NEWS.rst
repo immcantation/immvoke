@@ -14,9 +14,9 @@ Specificity:
   reference one (e.g. IEDB's BCR table): exact (``--exact``), substitution
   tolerant (``--fuzzy``, ``--identity``), indel tolerant (``--levenshtein``)
   and paired heavy+light (``--paired``) matching.
-+ ``immvoke annotate`` runs every mode through symscan_ by default; CompAIRR
-  (``--backend compairr``, exact modes) and pure Python (``--backend python``,
-  tolerant modes) remain available and give the same result.
++ ``immvoke annotate`` runs every mode through symscan_ by default; pure
+  Python (``--backend python``, tolerant modes) remains available and gives
+  the same result.
 
 .. _IEDB: https://www.iedb.org/
 .. _CoV-AbDab: https://opig.stats.ox.ac.uk/webapps/covabdab/

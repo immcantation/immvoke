@@ -438,14 +438,28 @@ class TestAnnotateCliParser(unittest.TestCase):
         self.assertIn('--levenshtein', text)
         self.assertIn('--paired', text)
         self.assertIn('--vgene-col', text)
-        self.assertIn('--compairr-bin', text)
         self.assertIn('--backend', text)
+        self.assertNotIn('compairr', text.lower())
 
     def test_backend_defaults_to_symscan(self):
         parser = getArgParser()
         args = parser.parse_args(['annotate', '--query', 'q.tsv', '--reference',
                                   'r.tsv', '--compare-cols', 'cdr3_aa', '-o', 'o.tsv'])
         self.assertEqual(args.backend, 'symscan')
+
+    def test_compairr_backend_still_parses_without_being_advertised(self):
+        parser = getArgParser()
+        args = parser.parse_args(['annotate', '--query', 'q.tsv', '--reference',
+                                  'r.tsv', '--compare-cols', 'cdr3_aa', '-o', 'o.tsv',
+                                  '--backend', 'compairr', '--compairr-bin', '/bin/c'])
+        self.assertEqual((args.backend, args.compairr_bin), ('compairr', '/bin/c'))
+
+        with mock.patch('sys.stderr', new_callable=io.StringIO) as err:
+            with self.assertRaises(SystemExit):
+                parser.parse_args(['annotate', '--query', 'q.tsv', '--reference',
+                                   'r.tsv', '-o', 'o.tsv', '--backend', 'blast'])
+        self.assertIn('symscan, python', err.getvalue())
+        self.assertNotIn('compairr', err.getvalue().lower())
 
     def test_exact_fuzzy_paired_are_mutually_exclusive(self):
         parser = getArgParser()

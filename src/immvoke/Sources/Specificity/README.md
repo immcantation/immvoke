@@ -113,19 +113,18 @@ reference antibodies), or `neither`, alongside `heavy_hit_ids`,
 Every mode runs through [symscan](https://github.com/yutanagano/symscan) by
 default (`--backend symscan`): a symmetric-deletion index that only ever
 looks at likely matches instead of scoring every query x reference pair.
-Two alternatives give the same result, and are kept as a fallback and for
-comparison:
+A pure-Python alternative gives the same result, and is kept as a fallback
+and for comparison:
 
 | `--backend` | Runs | Notes |
 | --- | --- | --- |
-| `symscan` (default) | every mode | tolerance of at most 14; `--threads -1` for every core |
-| `compairr` | `--exact`, `--paired` | [CompAIRR](https://github.com/uio-bmi/compairr) binary, built from source and put on `PATH` (or pointed at with `--compairr-bin`) |
+| `symscan` (default) | every mode | `--threads -1` for every core |
 | `python` | `--fuzzy`, `--identity`, `--levenshtein` | single threaded; cost grows with the candidate pool |
 
-Neither symscan nor CompAIRR has a concept of the `X` wildcard for an
-unresolved residue, so under exact and Hamming matching the rows that carry
-one are compared in Python instead, where `X` matches anything; every other
-row still goes through the faster engine.
+symscan has no concept of the `X` wildcard for an unresolved residue, so
+under exact and Hamming matching the rows that carry one are compared in
+Python instead, where `X` matches anything; every other row still goes
+through symscan.
 
 symscan indexes every deletion variant of every sequence -- a number that
 grows steeply with the tolerance and the sequence length -- and aborts the

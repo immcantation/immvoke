@@ -20,6 +20,7 @@ __author__ = 'Pramod Shinde'
 
 # Imports
 import logging
+from argparse import SUPPRESS, ArgumentTypeError
 from pathlib import Path
 
 import pandas
@@ -47,12 +48,35 @@ log = logging.getLogger(__name__)
 #: Matches runPairedExactAnnotation's own vgene_col/jgene_col defaults.
 FUZZY_EXACT_COLS = ['v_call', 'j_call']
 
-#: --backend choices: symscan runs every mode; compairr only the exact ones
-#: (--exact, --paired), python only the tolerant ones (--fuzzy, --identity,
-#: --levenshtein).
-BACKENDS = ('symscan', 'compairr', 'python')
+#: --backend choices: symscan runs every mode, python only the tolerant ones
+#: (--fuzzy, --identity, --levenshtein). PUBLIC_BACKENDS are the ones help
+#: text and error messages name; compairr still runs --exact/--paired but is
+#: left out of both.
+PUBLIC_BACKENDS = ('symscan', 'python')
+BACKENDS = PUBLIC_BACKENDS + ('compairr',)
 EXACT_BACKENDS = ('symscan', 'compairr')
 FUZZY_BACKENDS = ('symscan', 'python')
+
+
+def _backendName(value):
+    """
+    argparse type for --backend: like choices=BACKENDS, but an invalid value
+    is reported against PUBLIC_BACKENDS only.
+
+    Arguments:
+      value (str): the --backend value given.
+
+    Returns:
+      str: `value`, if it names a backend.
+
+    Raises:
+      ArgumentTypeError: if it does not.
+    """
+    if value not in BACKENDS:
+        raise ArgumentTypeError('invalid choice: %r (choose from %s)'
+                                % (value, ', '.join(PUBLIC_BACKENDS)))
+
+    return value
 
 
 def addAnnotateParser(commands):
@@ -141,25 +165,22 @@ def addAnnotateParser(commands):
                         metavar='COLUMN',
                         help='--exact only: column to require exact J-gene '
                              'agreement on')
-    parser.add_argument('--backend', choices=BACKENDS, default='symscan',
+    parser.add_argument('--backend', type=_backendName, default='symscan',
+                        metavar='{%s}' % ','.join(PUBLIC_BACKENDS),
                         help='matching engine. symscan runs every mode; '
-                             'compairr (an external binary) only --exact/'
-                             '--paired; python only --fuzzy/--identity/'
-                             '--levenshtein. All give the same result; '
-                             'rows symscan cannot index (an \'X\' wildcard, '
-                             'a tolerance above 14, or very long sequences '
-                             'at a high tolerance) are compared in Python '
+                             'python only --fuzzy/--identity/--levenshtein, '
+                             'with the same result. Rows symscan cannot '
+                             'index (an \'X\' wildcard, a tolerance above '
+                             '14, or very long sequences at a high '
+                             'tolerance) are compared in Python '
                              'automatically')
     parser.add_argument('--compairr-bin', default=None, dest='compairr_bin',
-                        metavar='PATH',
-                        help='--backend compairr only: path to the compairr '
-                             'binary; without it, PATH is searched')
+                        help=SUPPRESS)
     parser.add_argument('--threads', type=int, default=1,
-                        help='threads to use: compairr\'s own -t under '
-                             '--backend compairr, symscan\'s thread pool '
-                             'under --backend symscan (-1 for every core; '
-                             'only the first symscan run in a process sets '
-                             'it); the python backend is single threaded')
+                        help='threads for symscan\'s thread pool (-1 for '
+                             'every core; only the first symscan run in a '
+                             'process sets it); the python backend is '
+                             'single threaded')
     parser.add_argument('--id-col', default=DEFAULT_ID_COL, dest='id_col',
                         metavar='COLUMN',
                         help='column in --reference to report as each '
@@ -225,7 +246,8 @@ def _checkBackend(backend, allowed, mode):
     """
     if backend not in allowed:
         raise AnnotationError('--backend %s does not run %s; choose one of: %s'
-                              % (backend, mode, ', '.join(allowed)))
+                              % (backend, mode, ', '.join(
+                                  b for b in allowed if b in PUBLIC_BACKENDS)))
 
 
 def handleAnnotate(args):
