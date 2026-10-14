@@ -38,7 +38,6 @@ import pandas
 
 # Immvoke imports
 from immvoke.Exceptions import AnnotationError
-from immvoke.Sources.Specificity.Genes import inferLocus
 
 log = logging.getLogger(__name__)
 
@@ -282,7 +281,7 @@ def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
 #: edit distance summed over independently aligned columns is not the edit
 #: distance of any one alignment, the way Hamming distance pools cleanly.
 SEQUENCE_REGION_COLUMNS = {
-    'cdr3': ('cdr3_aa',),
+    'cdr3h': ('cdr3_aa',),
     'vdj': ('sequence_aa',),
     'cdrs': ('cdr1_aa', 'cdr2_aa', 'cdr3_aa'),
 }
@@ -308,7 +307,7 @@ _CDR3_LENGTH_COL = '__cdr3_length__'
 def _resolveSequenceRegion(sequence_region):
     """
     Arguments:
-      sequence_region (str): 'CDR3', 'VDJ' or 'CDRs', case insensitive.
+      sequence_region (str): 'CDR3H', 'VDJ' or 'CDRs', case insensitive.
 
     Returns:
       list: the AIRR column(s) to compare.
@@ -318,7 +317,7 @@ def _resolveSequenceRegion(sequence_region):
     """
     columns = SEQUENCE_REGION_COLUMNS.get(str(sequence_region).strip().lower())
     if columns is None:
-        raise AnnotationError("unknown sequence_region %r; choose one of: CDR3, "
+        raise AnnotationError("unknown sequence_region %r; choose one of: CDR3H, "
                               "VDJ, CDRs" % (sequence_region,))
 
     return list(columns)
@@ -434,41 +433,6 @@ def _restrictToHeavyChain(frame, label):
     return frame.reset_index(drop=True)
 
 
-def _fillLocus(frame, label):
-    """
-    Fill a blank `locus` from the row's own gene calls (Genes.inferLocus):
-    the V call's locus, else the J call's, else left blank.
-
-    Arguments:
-      frame (pandas.DataFrame): the table to fill.
-      label (str): 'query' or 'reference', for the log line only.
-
-    Returns:
-      pandas.DataFrame: `frame`, with blank loci filled where its gene
-      calls name one -- unchanged if it has no locus column or no blank.
-    """
-    if LOCUS_COL not in frame.columns:
-        return frame
-    blank = frame[LOCUS_COL].fillna('') == ''
-    if not blank.any():
-        return frame
-
-    v_calls = frame['v_call'] if 'v_call' in frame.columns else pandas.Series('', frame.index)
-    j_calls = frame['j_call'] if 'j_call' in frame.columns else pandas.Series('', frame.index)
-    inferred = pandas.Series([inferLocus(v, j) for v, j in zip(v_calls[blank], j_calls[blank])],
-                             index=frame.index[blank])
-    filled = inferred[inferred != '']
-    if len(filled):
-        frame = frame.copy()
-        frame.loc[filled.index, LOCUS_COL] = filled
-    log.info('%s: %d rows had a blank locus; filled from their gene calls: %s; '
-             '%d left blank', label, int(blank.sum()),
-             ', '.join('%s=%d' % kv for kv in sorted(filled.value_counts().items()))
-             or 'none', int(blank.sum()) - len(filled))
-
-    return frame
-
-
 def _requireAirr(frame, label):
     """
     Require `frame` to be an AIRR rearrangement table: every field the AIRR
@@ -544,7 +508,7 @@ def _writeIfRequested(result, output):
     log.info('wrote %s', out)
 
 
-def annotateSpecificity(query, reference, sequence_region='CDR3',
+def annotateSpecificity(query, reference, sequence_region='CDR3H',
                         partition_by=None, paired=False, identity_threshold=None,
                         distance_metric='hamming', threads=1,
                         output=None):
@@ -559,7 +523,8 @@ def annotateSpecificity(query, reference, sequence_region='CDR3',
         table itself. It must be an AIRR rearrangement table: every field
         the AIRR schema requires present as a column (values may be blank),
         as immvoke's own AIRR writer always produces.
-      sequence_region (str): which sequence to compare: 'CDR3' (cdr3_aa),
+      sequence_region (str): which sequence to compare: 'CDR3H' (the heavy
+        chain CDR3, cdr3_aa),
         'VDJ' (sequence_aa, the full V(D)J amino acid sequence) or 'CDRs'
         (cdr1_aa, cdr2_aa and cdr3_aa pooled -- Hamming only). Ignored when
         `paired` is True.
@@ -601,8 +566,6 @@ def annotateSpecificity(query, reference, sequence_region='CDR3',
     queries = _readAirrTsv(query)
     ref = _readAirrTsv(reference)
     _requireAirr(ref, 'reference')
-    queries = _fillLocus(queries, 'query')
-    ref = _fillLocus(ref, 'reference')
 
     if paired:
         if partition_by is not None or identity_threshold is not None:

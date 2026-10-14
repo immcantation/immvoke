@@ -7,40 +7,28 @@ each step; [README.md](README.md) covers how to run it.
 
 ## Workflow
 
-```mermaid
-graph TD
-    classDef input fill:#dae8fc,stroke:#000,stroke-width:1px,color:#000;
-    classDef process fill:#fff2cc,stroke:#000,stroke-width:1px,color:#000;
-    classDef decision fill:#e1d5e7,stroke:#000,stroke-width:1px,color:#000;
-    classDef output fill:#d5e8d4,stroke:#000,stroke-width:1px,color:#000;
+Each query row goes through these steps in order. Steps marked *automatic*
+always run; the others are set with the option shown (the
+`annotateSpecificity()` argument has the same name, with `_` for `-`).
 
-    Q[Query Dataset]:::input --> Paired
-    R[Reference Dataset <br>AIRR, e.g. IEDB]:::input --> Paired
-    Paired{Paired?}:::decision
+| # | Step | Option | Choices | Default |
+| --- | --- | --- | --- | --- |
+| 1 | Check the reference is AIRR | *automatic* | -- | -- |
+| 2 | Paired or single chain? | `--paired` | on, off | off |
+| 3 | Keep heavy chain rows | *automatic* | `IGH` only | -- |
+| 4 | Sequence to compare | `--sequence-region` | `CDR3H`, `VDJ`, `CDRs` | `CDR3H` |
+| 5 | Gene gate | `--partition-by` | none, `V`, `VJ`, `VJL` | none |
+| 6 | How close is a hit | `--identity-threshold` | a fraction in (0, 1] | exact |
+| 7 | Distance | `--distance-metric` | `hamming`, `levenshtein` | `hamming` |
+| 8 | Search | *automatic* | symscan; rows too large for it are skipped, with a warning | -- |
+| 9 | Output | `-o` (`output` in Python) | TSV, and the DataFrame returned | -- |
 
-    Paired -->|True| PairedRun[Heavy + light chain match <br>same V, J gene, exact CDR3 <br>via symscan]:::process
-    PairedRun --> PairedOut[Per-antibody result, one row per cell_id: <br>both / heavy_only / light_only / conflicting / neither]:::process
-
-    Paired -->|False| Heavy[Keep heavy chain IGH rows]:::process
-    Heavy --> Pre[Select sequence region: <br>CDR3, VDJ, CDRs]:::process
-    Pre --> Part{partition_by?}:::decision
-    Part -->|None| Global[Global sequence pool]:::process
-    Part -->|V, VJ, VJL| Binned[Gene / length gated pools <br>same gene, any allele]:::process
-    Global --> Thresh{identity_threshold?}:::decision
-    Binned --> Thresh
-
-    Thresh -->|1.0| Exact[Exact match]:::process
-    Thresh -->|< 1.0| Dist[Hamming or Levenshtein <br>within allowed mismatches]:::process
-
-    Exact --> Symscan[symscan <br>X matches any residue]:::process
-    Dist --> Symscan
-    Symscan -->|distance > 14 <br>or sequence too long| Skip[Skip those rows <br>with a warning]:::process
-
-    Symscan --> Out[Per-query result: n_hits_total, hit_ids, ... <br>every query row, 0 hits if unmatched]:::process
-
-    PairedOut --> File[Output Specificity File <br>TSV + returned DataFrame]:::output
-    Out --> File
-```
+With `--paired` on, steps 3-7 are replaced by one fixed comparison: an
+antibody (`cell_id`) matches a reference antibody only if both its heavy and
+its light chain have the same V gene, the same J gene and an exact CDR3 --
+classified `both`, `heavy_only`, `light_only`, `conflicting` or `neither`.
+Without it, every query heavy chain row gets one result row, 0 hits if
+unmatched (`n_hits_total`, `hit_ids`, ...).
 
 ## Input contract
 
@@ -60,15 +48,21 @@ needs the fields the chosen options read. A table without a `locus` column
 is compared whole; a table with one but no `IGH` row left is an error, never
 an empty result.
 
-A blank `locus` is filled from the row's own gene calls before the chains
-are split: the locus its V call names (`IGKV1-39` is `IGK`), or without a V
-call, its J call's. It stays blank when the calls name none, or V and J
-disagree -- nothing is guessed -- and the counts are logged. On IEDB this
-recovers 436 of the 486 light chains it leaves untyped.
+`cdr3_aa` must follow the AIRR definition in both tables: the CDR3 without
+its two flanking conserved residues, i.e. `junction_aa` minus its first and
+last residue (`ARGLDS`, not `CARGLDSW`). IEDB's does; annotate does not check
+or convert a query's, so a query whose `cdr3_aa` holds junctions will find
+no exact match.
+
+A blank `locus` is kept as the reference has it -- nothing is inferred
+from the gene calls -- so such a row is in neither the heavy nor the light
+chain pool: single-chain matching never compares it, and paired matching
+cannot pair it. (Of IEDB's human chains, 277 have a blank locus, nearly all
+of them light chains.)
 
 ## Matching rules
 
-**Sequence region.** `CDR3` compares `cdr3_aa`, `VDJ` compares
+**Sequence region.** `CDR3H` compares the heavy chain CDR3 (`cdr3_aa`), `VDJ` compares
 `sequence_aa`, and `CDRs` pools `cdr1_aa`, `cdr2_aa` and `cdr3_aa` under one
 shared tolerance. Pooling only works with Hamming distance, because edit
 distance does not add up across columns.

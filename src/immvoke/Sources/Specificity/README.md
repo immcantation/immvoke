@@ -41,7 +41,7 @@ the same options, as file paths or DataFrames, and returns the result table.
 | `immvoke annotate` | `annotateSpecificity()` | Values | Meaning |
 | --- | --- | --- | --- |
 | `--query`, `--reference` | `query`, `reference` | AIRR TSV (or DataFrame in Python) | the tables to match |
-| `--sequence-region` | `sequence_region` | `CDR3` (default), `VDJ`, `CDRs` | compare `cdr3_aa`; `sequence_aa`; or CDR1-3 pooled |
+| `--sequence-region` | `sequence_region` | `CDR3H` (default), `VDJ`, `CDRs` | compare the heavy chain CDR3 (`cdr3_aa`); `sequence_aa`; or CDR1-3 pooled |
 | `--partition-by` | `partition_by` | unset (default), `V`, `VJ`, `VJL` | only compare pairs with the same V-gene; V- and J-gene; or V-gene, J-gene and CDR3 length (same gene, any allele) |
 | `--identity-threshold` | `identity_threshold` | unset (exact), or a fraction in (0, 1] | e.g. `0.9` allows up to 10% of the query's positions to differ |
 | `--distance-metric` | `distance_metric` | `hamming` (default), `levenshtein` | substitutions only, or substitutions, insertions and deletions |

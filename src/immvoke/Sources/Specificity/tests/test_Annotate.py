@@ -124,11 +124,11 @@ def airr(rows):
 
 
 #: sequence_region -> the columns it compares, as annotateSpecificity does.
-REGION_COLUMNS = {'CDR3': ['cdr3_aa'], 'VDJ': ['sequence_aa'],
+REGION_COLUMNS = {'CDR3H': ['cdr3_aa'], 'VDJ': ['sequence_aa'],
                   'CDRs': ['cdr1_aa', 'cdr2_aa', 'cdr3_aa']}
 
 
-def bruteForceSpecificity(queries, reference, sequence_region='CDR3',
+def bruteForceSpecificity(queries, reference, sequence_region='CDR3H',
                           partition_by=None, identity_threshold=None,
                           distance_metric='hamming'):
     """
@@ -202,7 +202,7 @@ class TestAnnotateSpecificity(unittest.TestCase):
         reference = [heavy('ref1', 'CARDYW', sequence_aa='QVQLCARDYW',
                            cdr1_aa='GFT', cdr2_aa='ISS')]
 
-        self.assertEqual(self._hits(queries, reference, sequence_region='CDR3'),
+        self.assertEqual(self._hits(queries, reference, sequence_region='CDR3H'),
                          ['ref1'])
         self.assertEqual(self._hits(queries, reference, sequence_region='VDJ'), [''])
         self.assertEqual(self._hits(queries, reference, sequence_region='CDRs'), [''])
@@ -371,22 +371,6 @@ class TestAnnotateSpecificity(unittest.TestCase):
         result = annotateSpecificity(frame(blank_j), airr(reference), paired=True)
         self.assertEqual(result['classification'].tolist(), ['heavy_only'])
 
-    def test_a_blank_locus_is_filled_from_the_gene_calls(self):
-        """A light chain IEDB left untyped still pairs; a heavy chain with no
-        locus is still compared."""
-        rows = [dict(sequence_id='h1', cell_id='ab1', locus='IGH', cdr3_aa='CARDYW',
-                     v_call='IGHV1-2*02', j_call='IGHJ4*02'),
-                dict(sequence_id='k1', cell_id='ab1', locus='', cdr3_aa='CQQYNS',
-                     v_call='IGKV1-39*01', j_call='IGKJ1*01')]
-        reference = [dict(row, cell_id='refA') for row in rows]
-
-        paired = annotateSpecificity(frame(rows), airr(reference), paired=True)
-        self.assertEqual(paired['classification'].tolist(), ['both'])
-
-        hits = self._hits([dict(heavy('q1', 'CARDYW'), locus='')],
-                          [dict(heavy('ref1', 'CARDYW'), locus='')])
-        self.assertEqual(hits, ['ref1'])
-
     def test_invalid_arguments_raise(self):
         queries = [heavy('q1', 'CARDYW', cdr1_aa='GFT', cdr2_aa='ISY')]
         cases = [{'sequence_region': 'CDR4'}, {'partition_by': 'J'},
@@ -516,7 +500,7 @@ class TestAnnotateCli(unittest.TestCase):
 
         self.assertEqual((args.sequence_region, args.partition_by, args.paired,
                           args.identity_threshold, args.distance_metric),
-                         ('CDR3', None, False, None, 'hamming'))
+                         ('CDR3H', None, False, None, 'hamming'))
 
     def test_invalid_choices_are_rejected(self):
         for extra in (['--backend', 'symscan'], ['--partition-by', 'J'],

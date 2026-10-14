@@ -15,7 +15,6 @@ import pandas
 from immvoke.Sources.Specificity.Genes import (
     GeneGate,
     callsAgree,
-    inferLocus,
     parseCall,
 )
 
@@ -76,28 +75,6 @@ class TestCallsAgree(unittest.TestCase):
             with self.subTest(other=other):
                 self.assertFalse(agree('', other))
                 self.assertFalse(agree('IGVL3-10', other))
-
-
-class TestInferLocus(unittest.TestCase):
-    """
-    Tests for filling a blank locus from the chain's own gene calls
-    """
-
-    def test_the_v_call_names_the_locus(self):
-        self.assertEqual(inferLocus('IGKV1-39*01', 'IGKJ1*01'), 'IGK')
-        self.assertEqual(inferLocus('IGLV2-14*01, IGLV2-23*02', ''), 'IGL')
-
-    def test_the_j_call_is_used_without_a_v_call(self):
-        self.assertEqual(inferLocus('', 'IGLJ2*01'), 'IGL')
-
-    def test_nothing_is_guessed(self):
-        cases = [('', ''),                          # no gene call
-                 ('IGVL3-10', ''),                  # unrecognized
-                 ('IGKV1-39*01', 'IGLJ2*01'),       # V and J disagree
-                 ('IGKV1-39*01, IGLV2-14*01', '')]  # V names two loci
-        for v_call, j_call in cases:
-            with self.subTest(v_call=v_call, j_call=j_call):
-                self.assertEqual(inferLocus(v_call, j_call), '')
 
 
 class TestGeneGate(unittest.TestCase):

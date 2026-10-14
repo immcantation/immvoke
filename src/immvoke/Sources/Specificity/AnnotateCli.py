@@ -53,8 +53,9 @@ def addAnnotateParser(commands):
                              'table; its sequence_id is reported as each '
                              'hit\'s identifier (cell_id under --paired)')
     parser.add_argument('--sequence-region', dest='sequence_region',
-                        choices=['CDR3', 'VDJ', 'CDRs'], default='CDR3',
-                        help='which sequence to compare: CDR3 (cdr3_aa), VDJ '
+                        choices=['CDR3H', 'VDJ', 'CDRs'], default='CDR3H',
+                        help='which sequence to compare: CDR3H (the heavy '
+                             'chain CDR3, cdr3_aa), VDJ '
                              '(sequence_aa, the full V(D)J amino acid '
                              'sequence) or CDRs (cdr1_aa, cdr2_aa and cdr3_aa '
                              'pooled -- --distance-metric hamming only)')

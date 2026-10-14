@@ -50,36 +50,6 @@ def parseCall(call):
     return frozenset(match.group('gene') for match in _CALL_REGEX.finditer(call or ''))
 
 
-def _loci(call):
-    """
-    Returns:
-      set: the loci (IGH, IGK, ...) the gene names in one call cell belong to.
-    """
-    return {match.group(2) for match in _CALL_REGEX.finditer(call or '')}
-
-
-def inferLocus(v_call, j_call):
-    """
-    The locus a chain's gene calls name, for a chain whose locus is blank.
-
-    Arguments:
-      v_call (str): the V-gene call cell.
-      j_call (str): the J-gene call cell.
-
-    Returns:
-      str: the one locus the V call names (IGKV1-39 -> IGK), or, without a
-      V call, the one the J call names; '' when the calls name none, more
-      than one, or V and J disagree -- nothing is guessed.
-    """
-    v_loci, j_loci = _loci(v_call), _loci(j_call)
-    if len(v_loci) == 1 and (not j_loci or j_loci == v_loci):
-        return v_loci.pop()
-    if not v_loci and len(j_loci) == 1:
-        return j_loci.pop()
-
-    return ''
-
-
 def callsAgree(a, b):
     """
     Whether two parsed calls (see parseCall) agree.
