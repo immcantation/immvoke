@@ -9,7 +9,11 @@ it. How the matching works, step by step, is in [idea.md](idea.md).
 [IEDB](https://www.iedb.org/) (`Iedb.py`) publishes its BCR (antibody)
 receptors in AIRR format, as `bcr_full_airr.tsv` inside its bulk
 `airr_full.zip` export, refreshed weekly. `immvoke specificity bcr` downloads
-that table as is -- one rearrangement record per chain, linked by `cell_id`,
+that table, keeping **human receptors only**: a receptor is kept when it has
+a human chain (`locus_species` `NCBITAXON:9606`) and no chain of another
+species -- a chain with no species recorded rides along with its human
+partner, so pairs are never split. The rest is kept as is -- one
+rearrangement record per chain, linked by `cell_id`,
 built from IEDB's calculated (IMGT standardized) gene calls and CDRs, with
 the epitope and assay context (`iedb_epitope_name`, `iedb_assay_ids`, ...)
 alongside -- and writes it with a `.validation.txt` report next to it.

@@ -258,7 +258,8 @@ class TestIedbSource(unittest.TestCase):
         """Blank cells stay '' rather than NaN, and nothing turns numeric."""
         source = IedbSource(makeClient(lambda *a: FakeResponse(200)))
         unit = DataUnit(unit_id='bcr_full_airr.tsv', collection='bcr', url=BULK_URL)
-        frame_in = iedbAirrRows({'sequence_id': '1_1', 'locus': 'IGH',
+        frame_in = iedbAirrRows({'cell_id': '1', 'sequence_id': '1_1', 'locus': 'IGH',
+                                 'locus_species': 'NCBITAXON:9606',
                                  'cdr3_aa': 'ARDYW', 'iedb_assay_ids': '32'})
 
         with tempfile.TemporaryDirectory() as outdir:
@@ -267,7 +268,7 @@ class TestIedbSource(unittest.TestCase):
             metadata, chunks = source.readUnit(path, unit)
             frame = pandas.concat(list(chunks), ignore_index=True)
 
-        self.assertEqual(metadata, {})
+        self.assertEqual(metadata, {'human_cells': frozenset(['1'])})
         self.assertEqual(list(frame.columns), list(IEDB_AIRR_COLUMNS))
         self.assertEqual(frame['cdr3_aa'].tolist(), ['ARDYW'])
         self.assertEqual(frame['iedb_assay_ids'].tolist(), ['32'])
@@ -307,16 +308,26 @@ class TestIedbAirrExport(unittest.TestCase):
         self.assertTrue(unit.url.endswith('airr_full.zip'))
 
     def _normalize(self, frame):
+        """Read and normalize `frame` the way `immvoke specificity bcr` does,
+        from a downloaded TSV."""
         source = IedbSource(makeClient(lambda *a: FakeResponse(200)))
         unit = DataUnit(unit_id='bcr_full_airr.tsv', collection='bcr', url=BULK_URL)
         report = {'rows_in': 0, 'rows_out': 0}
 
-        return source.normalizeChunk({}, frame, unit, 0, report), report
+        with tempfile.TemporaryDirectory() as outdir:
+            path = Path(outdir) / 'bcr_full_airr.tsv'
+            frame.to_csv(path, sep='\t', index=False)
+            metadata, chunks = source.readUnit(path, unit, chunksize=1)
+            normalized = [source.normalizeChunk(metadata, chunk, unit, 0, report)
+                          for chunk in chunks]
+
+        return pandas.concat(normalized, ignore_index=True), report
 
     def _antibody(self):
         """One antibody, both chains, as IEDB's AIRR export writes it."""
         return iedbAirrRows(
             {'cell_id': '1284_2134780p', 'sequence_id': '1284_1', 'locus': 'IGH',
+             'locus_species': 'NCBITAXON:9606',
              'productive': 'T', 'v_call': 'IGHV5-9*01, IGHV5-9*03',
              'j_call': 'IGHJ4*02', 'cdr3_aa': 'TRLGDYGYAYTMDY', 'iedb_epitope_name': 'G58, L59',
              'iedb_assay_outcome': 'positive'},
@@ -324,6 +335,25 @@ class TestIedbAirrExport(unittest.TestCase):
              'productive': 'T', 'v_call': 'IGKV3-2*01', 'j_call': 'IGKJ2*01',
              'cdr3_aa': 'QQSKEVPLT',
              'iedb_epitope_name': 'G58, L59', 'iedb_assay_outcome': 'positive'})
+
+    def test_only_human_receptors_are_kept(self):
+        """Per receptor: a chain with no species recorded rides along with a
+        human one; any chain of another species drops the whole receptor."""
+        human, mouse, construct = 'NCBITAXON:9606', 'NCBITAXON:10090', 'NCBITAXON:32630'
+        frame = iedbAirrRows(
+            {'cell_id': 'human', 'sequence_id': '1_1', 'locus_species': human},
+            {'cell_id': 'human', 'sequence_id': '1_2', 'locus_species': human},
+            {'cell_id': 'humanBlank', 'sequence_id': '2_1', 'locus_species': human},
+            {'cell_id': 'humanBlank', 'sequence_id': '2_2', 'locus_species': ''},
+            {'cell_id': 'mouse', 'sequence_id': '3_1', 'locus_species': mouse},
+            {'cell_id': 'mixed', 'sequence_id': '4_1', 'locus_species': human},
+            {'cell_id': 'mixed', 'sequence_id': '4_2', 'locus_species': construct},
+            {'cell_id': 'blank', 'sequence_id': '5_1', 'locus_species': ''})
+
+        kept, report = self._normalize(frame)
+
+        self.assertEqual(kept['sequence_id'].tolist(), ['1_1', '1_2', '2_1', '2_2'])
+        self.assertEqual((report['rows_in'], report['rows_out']), (8, 4))
 
     def test_records_pass_through_with_provenance(self):
         frame, report = self._normalize(self._antibody())

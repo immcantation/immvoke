@@ -14,7 +14,8 @@ The receptor tables (bcr, tcr) come from IEDB's own AIRR export,
 airr_full.zip: one AIRR rearrangement TSV per table, a record per chain
 linked by cell_id, built from IEDB's calculated (IMGT standardized) fields
 and carrying the epitope and assay context alongside. They are already AIRR,
-so normalizeChunk passes them through, adding only provenance columns.
+so normalizeChunk passes them through, adding only provenance columns -- and
+keeping human receptors only (see _humanCells).
 bcell and bcr_to_bcell carry no sequences -- one is assay results, the other
 a join table -- so they keep their own column names.
 """
@@ -62,11 +63,43 @@ _TABLE_SOURCE = {
 #: Tables served from the shared AIRR bulk ZIP rather than the API.
 _BULK_TABLES = frozenset(['bcr', 'tcr'])
 
+#: The receptor tables are limited to human receptors: IEDB's AIRR export
+#: records each chain's species in `locus_species`, as an NCBI taxon.
+HUMAN = 'NCBITAXON:9606'
+
 #: qualitative_measure has no server-side filter on bcell_search, so it is
 #: applied client-side after fetching; this is its known controlled
 #: vocabulary.
 _QUALITATIVE_MEASURES = ('Positive', 'Positive-High', 'Positive-Intermediate',
                          'Positive-Low', 'Negative')
+
+def _humanCells(path, chunksize):
+    """
+    The receptors (cell_id) of a receptor AIRR table to keep: those with a
+    human chain and no chain of another species. A chain with no species
+    recorded does not count against its receptor, so a human heavy chain
+    keeps its light chain even when only the heavy one names a species.
+    Decided per receptor, not per chain, so a pair is never split.
+
+    Arguments:
+      path (Path): the downloaded AIRR TSV.
+      chunksize (int): rows per chunk while scanning it.
+
+    Returns:
+      frozenset: the cell_id values to keep.
+    """
+    human, other = set(), set()
+    for chunk in pandas.read_csv(path, sep='\t', dtype=str, na_filter=False,
+                                 usecols=['cell_id', 'locus_species'],
+                                 chunksize=chunksize):
+        species = chunk['locus_species']
+        human.update(chunk.loc[species == HUMAN, 'cell_id'])
+        other.update(chunk.loc[(species != HUMAN) & (species != ''), 'cell_id'])
+    log.info('%s: %d human receptors kept, %d with a non-human chain dropped',
+             Path(path).name, len(human - other), len(other))
+
+    return frozenset(human - other)
+
 
 def _rowHash(row):
     """
@@ -118,8 +151,9 @@ class IedbSource(SourceBase):
     homepage = 'https://www.iedb.org/'
     collections = ('bcr', 'tcr', 'bcell', 'bcr_to_bcell')
     collection_help = {
-        'bcr': 'BCR (antibody) receptor sequences, from the AIRR bulk export',
-        'tcr': 'TCR receptor sequences, from the same AIRR bulk export',
+        'bcr': 'human BCR (antibody) receptor sequences, from the AIRR bulk '
+               'export',
+        'tcr': 'human TCR receptor sequences, from the same AIRR bulk export',
         'bcell': 'B-cell assay records: antigen, epitope and qualitative outcome',
         'bcr_to_bcell': 'join table linking BCR receptor groups to B-cell assay records',
     }
@@ -272,13 +306,16 @@ class IedbSource(SourceBase):
             JSON tables are modest enough to read as a single chunk.
 
         Returns:
-          tuple: ({}, iterator of raw record chunks). IEDB tables carry no
-          per-unit metadata line. bcr and tcr are read as text, blank cells
-          as '' rather than NaN.
+          tuple: (metadata, iterator of raw record chunks). IEDB tables carry
+          no per-unit metadata line; for bcr and tcr, metadata holds
+          `human_cells`, the receptors normalizeChunk keeps (see
+          _humanCells). bcr and tcr are read as text, blank cells as ''
+          rather than NaN.
         """
         if unit.collection in _BULK_TABLES:
-            return {}, pandas.read_csv(path, sep='\t', dtype=str, na_filter=False,
-                                       chunksize=chunksize)
+            metadata = {'human_cells': _humanCells(path, chunksize)}
+            return metadata, pandas.read_csv(path, sep='\t', dtype=str,
+                                             na_filter=False, chunksize=chunksize)
 
         with open(path) as handle:
             records = json.load(handle)
@@ -307,8 +344,9 @@ class IedbSource(SourceBase):
         """
         if unit.collection in _BULK_TABLES:
             report['rows_in'] += len(chunk)
-            report['rows_out'] += len(chunk)
-            frame = coerceAirrTypes(chunk)
+            frame = chunk[chunk['cell_id'].isin(metadata['human_cells'])]
+            report['rows_out'] += len(frame)
+            frame = coerceAirrTypes(frame.copy())
         else:
             frame = self._normalizeAssayChunk(chunk, unit, report)
 
