@@ -11,7 +11,7 @@ __author__ = 'Susanna Marquez'
 # Imports
 import logging
 import sys
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
 from pathlib import Path
 
 # Immvoke imports
@@ -22,6 +22,11 @@ from immvoke.Exceptions import ImmvokeError
 from immvoke.Http import HttpClient
 from immvoke.Schema import loadSchema, saveSchema
 from immvoke.Sources import ALIASES, REGISTRY, canonicalName, getSource
+from immvoke.Sources.Specificity import REGISTRY as SPECIFICITY_REGISTRY
+from immvoke.Sources.Specificity import getSpecificitySource
+from immvoke.Sources.Specificity.AnnotateCli import addAnnotateParser, handleAnnotate
+from immvoke.Sources.Specificity.BcrCli import addBcrParser, handleBcr
+from immvoke.Sources.Specificity.Provenance import writeSpecificityMetadata
 from immvoke.Version import __date__, __version__
 
 log = logging.getLogger('immvoke')
@@ -152,6 +157,8 @@ def getArgParser():
     _addReferenceParser(commands)
     for name, source in sorted(REGISTRY.items()):
         _addSourceParser(commands, name, source)
+    _addSpecificityGroupParser(commands)
+    addAnnotateParser(commands)
 
     return parser
 
@@ -393,6 +400,132 @@ def _addSourceParser(commands, name, source):
 #: host are bulk services, and the mirror alone makes 100+ requests, so the
 #: default would spend most of a build asleep rather than transferring.
 MIRROR_DELAY = 0.05
+
+
+def _addSpecificityParser(commands, name, source):
+    """
+    Add one specificity database's subcommand tree, with a level per table.
+
+    A trimmed copy of `_addSourceParser`: no --format/samplesheet flags, since
+    those are repertoire specific, and one extra synthetic 'all' table that
+    loops every table the database offers.
+    """
+    schema = loadSchemaQuietly(name)
+
+    parser = commands.add_parser(
+        name, help=source.description,
+        description='%s\n\nHomepage: %s' % (source.description, source.homepage),
+        formatter_class=CommonHelpFormatter)
+    actions = parser.add_subparsers(dest='action', metavar='ACTION',
+                                    required=True)
+
+    action_help = {
+        'search': ('list what a table contains',
+                   'Resolve a table, optionally narrowed by filters, and '
+                   'print (or save with --out) a summary of it. Nothing is '
+                   'downloaded.'),
+        'download': ('download a table',
+                    'Fetch a table, optionally narrowed by filters, and write '
+                    'it as a raw mirror plus one normalized TSV: a real AIRR '
+                    'rearrangement TSV for a table listed in the database\'s '
+                    'airr_collections, a plain TSV of the source\'s own '
+                    'columns otherwise.'),
+    }
+    for action, (helptext, description) in action_help.items():
+        action_parser = actions.add_parser(action, help=helptext,
+                                           description=description,
+                                           formatter_class=CommonHelpFormatter)
+        tables = action_parser.add_subparsers(dest='table', metavar='TABLE',
+                                              required=True)
+
+        entries = [(table, source.collection_help.get(table), table)
+                   for table in source.collections]
+        entries.append(('all', 'every table', None))
+
+        for table_name, table_help, filter_table in entries:
+            if filter_table is None:
+                summary = 'every table this database offers'
+            else:
+                summary = 'the %s table (%s), optionally narrowed down with the filter flags below' % (table_name, table_help)
+            leaf = tables.add_parser(
+                table_name, help=table_help,
+                description='%s %s.' % (action.capitalize(), summary),
+                formatter_class=CommonHelpFormatter)
+            if filter_table is not None:
+                addFilterArgs(leaf, schema, name, filter_table)
+            leaf.add_argument('--limit', type=int, default=None,
+                              help='stop after this many rows'
+                                   if filter_table is not None
+                                   else 'stop after this many tables')
+            if action == 'search':
+                leaf.add_argument('-o', '--out', type=Path, default=None,
+                                  help='write the result to a TSV file')
+            else:
+                leaf.add_argument('--outdir', type=Path, required=True,
+                                  help='directory to write into: raw/ '
+                                       'mirrors the upstream file(s), '
+                                       'specificity/ holds the normalized '
+                                       'TSV(s)')
+                leaf.add_argument('--dry-run', action='store_true',
+                                  help='report what would be fetched, then stop')
+                leaf.add_argument('--no-resume', action='store_true',
+                                  help='re-download in full rather than '
+                                       'continuing a partly fetched file')
+                leaf.add_argument('--strict-airr', action='store_true',
+                                  help='for a table written as AIRR, drop '
+                                       'columns the AIRR schema does not '
+                                       'define; no effect on other tables')
+
+
+def _addSpecificityGroupParser(commands):
+    """
+    Add the `specificity` subcommand: `list`, one per registered database, and
+    a synthetic `all` that fans out to every registered database.
+    """
+    group = commands.add_parser(
+        'specificity', help='search and download specificity databases',
+        description='Search and download specificity databases (reference '
+                    'tables of epitopes, assays and receptor sequences), as '
+                    'opposed to repertoire sequencing sources.',
+        formatter_class=CommonHelpFormatter)
+    dbs = group.add_subparsers(dest='db', metavar='DB', required=True)
+
+    dbs.add_parser(
+        'list', help='list the specificity databases immvoke knows about',
+        description='List every specificity database immvoke knows how to '
+                    'fetch from, along with a one-line description and its '
+                    'homepage.',
+        formatter_class=CommonHelpFormatter)
+
+    addBcrParser(dbs)
+
+    for name, source in sorted(SPECIFICITY_REGISTRY.items()):
+        _addSpecificityParser(dbs, name, source)
+
+    all_group = dbs.add_parser(
+        'all', help='every registered specificity database',
+        description='Act on every registered specificity database at once.',
+        formatter_class=CommonHelpFormatter)
+    all_actions = all_group.add_subparsers(dest='action', metavar='ACTION',
+                                           required=True)
+    all_download = all_actions.add_parser(
+        'download', help='download every table of every database',
+        description='Download every table of every registered specificity '
+                    'database. Filters cannot be applied here, since '
+                    'different databases have unrelated fields; target one '
+                    'database directly to filter it.',
+        formatter_class=CommonHelpFormatter)
+    all_download.add_argument('--outdir', type=Path, required=True,
+                              help='directory to write into; one '
+                                   'subdirectory per database')
+    all_download.add_argument('--limit', type=int, default=None,
+                              help='stop after this many tables, per database')
+    all_download.add_argument('--dry-run', action='store_true',
+                              help='report what would be fetched, then stop')
+    all_download.add_argument('--strict-airr', action='store_true',
+                              help='for a table written as AIRR, drop columns '
+                                   'the AIRR schema does not define; no effect '
+                                   'on other tables')
 
 
 def makeClient(args):
@@ -789,6 +922,172 @@ def handleDownload(args):
     return 0
 
 
+def _resolveSpecificityTables(source, args):
+    """
+    Return the tables a specificity action should act on.
+
+    Arguments:
+      source (SourceBase): the specificity source.
+      args (Namespace): parsed arguments, carrying `table` and `limit`.
+
+    Returns:
+      list: table names. `--limit` caps how many are used when `table` is
+      'all'; for a single named table it has no effect, since that table
+      alone is already the whole selection.
+    """
+    if args.table != 'all':
+        return [args.table]
+
+    tables = list(source.collections)
+
+    return tables[:args.limit] if args.limit is not None else tables
+
+
+def _writeSpecificityTsv(chunks, out):
+    """
+    Write normalized specificity records as a TSV, streaming chunk by chunk.
+
+    Unlike `Convert.writeAirr`, this performs no AIRR schema validation:
+    specificity columns are a source's own, not AIRR rearrangement fields.
+
+    Arguments:
+      chunks (iterable): DataFrames of normalized records.
+      out (Path): output path.
+
+    Returns:
+      int: rows written.
+    """
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    written = 0
+    header_written = False
+    with open(out, 'w', newline='') as handle:
+        for frame in chunks:
+            frame.to_csv(handle, sep='\t', index=False, header=not header_written)
+            header_written = True
+            written += len(frame)
+
+    if not header_written:
+        out.write_text('')
+
+    return written
+
+
+def handleSpecificityList(args):
+    """List registered specificity databases."""
+    for name, source in sorted(SPECIFICITY_REGISTRY.items()):
+        print('%-10s %s' % (name, source.description))
+        print('%-10s %s' % ('', source.homepage))
+        if source.license:
+            print('%-10s license: %s' % ('', source.license))
+        for paper in source.citation:
+            print('%-10s cite: %s' % ('', paper))
+
+    return 0
+
+
+def handleSpecificitySearch(args):
+    """List what a table (or every table) contains, without downloading."""
+    client = makeClient(args)
+    source = getSpecificitySource(args.db, client)
+    filters = collectFilters(args)
+    tables = _resolveSpecificityTables(source, args)
+
+    rows = []
+    for table in tables:
+        query = source.validateQuery(table, filters)
+        for unit in source.searchUnits(query):
+            rows.append({'unit_id': unit.unit_id, 'collection': unit.collection,
+                        'url': unit.url})
+
+    log.info('%d table(s)', len(rows))
+    if args.out is not None:
+        Catalog.saveCatalog(rows, args.out,
+                            columns=('unit_id', 'collection', 'url'))
+        log.info('wrote %s', args.out)
+    else:
+        for row in rows:
+            print('%-16s %-24s %s' % (row['collection'], row['unit_id'], row['url']))
+
+    return 0
+
+
+def handleSpecificityDownload(args):
+    """Download one or more tables: a raw mirror plus one normalized TSV each."""
+    client = makeClient(args)
+    source = getSpecificitySource(args.db, client)
+    filters = collectFilters(args)
+    tables = _resolveSpecificityTables(source, args)
+
+    outdir = Path(args.outdir)
+    raw_dir = outdir / 'raw'
+    normalized_dir = outdir / 'specificity'
+
+    records = []
+    formats_written = set()
+    for table in tables:
+        query = source.validateQuery(table, filters)
+        units = source.searchUnits(query)
+
+        if args.dry_run:
+            for unit in units:
+                print('%-16s %s' % (table, unit.unit_id))
+            continue
+
+        for unit in units:
+            result = source.fetchUnit(unit, raw_dir, resume=not args.no_resume)
+            _, chunks, report = source.convertUnit(result.path, unit)
+
+            dest = normalized_dir / ('%s.tsv' % table)
+            if table in source.airr_collections:
+                validation = Convert.writeAirr(chunks, dest,
+                                               strict=args.strict_airr)
+                Convert.writeValidationReport(validation, dest)
+                log.info('%s: %d rows, %d invalid, %d rows in', dest.name,
+                         validation['rows_checked'], validation['rows_invalid'],
+                         report['rows_in'])
+                output_format = 'airr'
+            else:
+                rows = _writeSpecificityTsv(chunks, dest)
+                log.info('%s: %d rows in, %d rows written', dest.name,
+                         report['rows_in'], rows)
+                output_format = 'tsv'
+            formats_written.add(output_format)
+
+            records.append(Provenance.buildUnitRecord(
+                unit, result, outdir, {output_format: dest}))
+
+    if args.dry_run:
+        log.info('dry run: nothing downloaded')
+        return 0
+
+    # A specificity download represents the database's current state, not one
+    # more addition to a growing set the way OAS downloads are, so this always
+    # replaces the metadata file rather than accumulating old runs into it --
+    # see Specificity.Provenance for why that is a separate writer.
+    writeSpecificityMetadata(
+        outdir, args.db, args.table, filters, args.limit, records,
+        schema=source.schema, license=source.license, citation=source.citation,
+        formats=formats_written or ('tsv',))
+
+    return 0
+
+
+def handleSpecificityDownloadAll(args):
+    """Download every table of every registered specificity database."""
+    outdir = Path(args.outdir)
+
+    for name in sorted(SPECIFICITY_REGISTRY):
+        log.info('downloading specificity source %s', name)
+        handleSpecificityDownload(Namespace(
+            db=name, table='all', outdir=outdir / name, limit=args.limit,
+            dry_run=args.dry_run, no_resume=False,
+            strict_airr=args.strict_airr))
+
+    return 0
+
+
 def main():
     """
     Parse the commandline and dispatch to the selected subcommand.
@@ -830,6 +1129,23 @@ def main():
                 return handleSearch(args)
             if args.action == 'download':
                 return handleDownload(args)
+
+        if args.command == 'specificity':
+            if args.db == 'list':
+                return handleSpecificityList(args)
+            if args.db == 'all':
+                return handleSpecificityDownloadAll(args)
+            if args.db == 'bcr':
+                return handleBcr(args)
+            # The action and table levels are required subparsers, so argparse
+            # has already rejected a commandline missing either.
+            if args.action == 'search':
+                return handleSpecificitySearch(args)
+            if args.action == 'download':
+                return handleSpecificityDownload(args)
+
+        if args.command == 'annotate':
+            return handleAnnotate(args)
 
         parser.print_help(sys.stderr)
         return 1

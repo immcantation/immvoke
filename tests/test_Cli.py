@@ -91,6 +91,32 @@ class TestArgParser(unittest.TestCase):
             self.assertIn(collection, text)
             self.assertIn(OasSource.collection_help[collection], text)
 
+    def test_specificity_help_lists_the_tables(self):
+        """`immvoke specificity iedb download --help` names the tables it accepts."""
+        from immvoke.Sources.Specificity.Iedb import IedbSource
+
+        parser = getArgParser()
+        with mock.patch('sys.stdout', new_callable=io.StringIO) as out:
+            with self.assertRaises(SystemExit):
+                parser.parse_args(['specificity', 'iedb', 'download', '--help'])
+
+        text = out.getvalue()
+        for table in IedbSource.collections:
+            self.assertIn(table, text)
+
+    def test_specificity_all_download_takes_no_table(self):
+        """
+        `specificity all` fans out to every database's every table, so it has
+        no table level of its own the way `specificity <db>` does.
+        """
+        parser = getArgParser()
+        args = parser.parse_args(['specificity', 'all', 'download',
+                                  '--outdir', '/tmp/does-not-need-to-exist'])
+
+        self.assertEqual(args.db, 'all')
+        self.assertEqual(args.action, 'download')
+        self.assertFalse(hasattr(args, 'table'))
+
     def test_collection_is_required(self):
         """
         Omitting the collection is a parse error, not a runtime one.
