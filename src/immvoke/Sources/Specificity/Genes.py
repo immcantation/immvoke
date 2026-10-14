@@ -5,23 +5,19 @@ An AIRR `v_call`/`j_call` cell is not always one clean name: IEDB alone mixes
 allele level calls (`IGHV1-2*02`), gene level ones (`IGHV1-2`), several calls
 in one cell (`IGHV1-2*02, IGHV1-2*04`) and blanks. Comparing those as plain
 strings makes `IGHV1-2*02` and `IGHV1-2` disagree, so the gene gate parses
-each cell into the names it holds and compares those instead, at a level the
-caller chooses:
+each cell into the genes it names and compares those instead: two calls
+agree on the same gene, whatever the allele (IGHV1-2*02 == IGHV1-2*04 ==
+IGHV1-2, but IGHV1-2 != IGHV1-69).
 
-    allele  same gene and same allele (IGHV1-2*02 == IGHV1-2*02)
-    gene    same gene, any allele     (IGHV1-2*02 == IGHV1-2*04)
-    family  same family               (IGHV1-2*02 == IGHV1-69*01)
+Two cells agree when they name a gene in common. A blank cell, or one naming
+no recognizable gene, has nothing to compare and agrees with nothing -- not
+even another blank.
 
-Two cells agree when any name in one agrees with any name in the other. A
-blank cell, or one naming no recognizable gene, has nothing to compare and
-agrees with nothing -- not even another blank. A gene level name (`IGHV1-2`) carries no allele, so under 'allele'
-it agrees with nothing -- it is a gene level match, not an allele level one.
-
-The gene and family patterns are Change-O's (changeo/Gene.py, Immcantation),
-so a name parses here the way Change-O's getGene/getFamily would parse it.
-The allele is read as an optional `*` suffix of the gene instead of with
-Change-O's allele pattern, which also accepts `-` as the allele separator
-and so would read a gene level `IGHV1-2` as gene `IGHV1` allele `2`.
+The gene pattern is Change-O's (changeo/Gene.py, Immcantation), so a name
+parses here the way Change-O's getGene would parse it. The allele is read
+as an optional `*` suffix of the gene instead of with Change-O's allele
+pattern, which also accepts `-` as the allele separator and so would read a
+gene level `IGHV1-2` as gene `IGHV1` allele `2`.
 """
 
 # Info
@@ -33,62 +29,25 @@ import re
 
 import numpy
 
-# Immvoke imports
-from immvoke.Exceptions import AnnotationError
-
 log = logging.getLogger(__name__)
-
-#: Levels a gene name can be compared at, strictest first.
-GENE_MATCH_LEVELS = ('allele', 'gene', 'family')
 
 #: Change-O's gene pattern, plus an optional `*allele` suffix.
 _CALL_REGEX = re.compile(r'(?P<gene>(IG[HLK]|TR[ABGD])([VDJ][A-R0-9]+[-/\w]*))'
                          r'(\*(?P<allele>[.\w]+))?')
-#: Change-O's family pattern.
-_FAMILY_REGEX = re.compile(r'((IG[HLK]|TR[ABGD])([VDJ][A-R0-9]+))')
 
 
-def _checkLevel(level):
+def parseCall(call):
     """
-    Raises:
-      AnnotationError: if `level` is not one of GENE_MATCH_LEVELS.
-    """
-    if level not in GENE_MATCH_LEVELS:
-        raise AnnotationError('unknown gene_match %r; choose one of: %s'
-                              % (level, ', '.join(GENE_MATCH_LEVELS)))
-
-
-def parseCall(call, level='gene'):
-    """
-    Parse one gene call cell into the names it holds at `level`.
+    Parse one gene call cell into the genes it names.
 
     Arguments:
       call (str): the cell, e.g. 'IGHV1-2*02, IGHV1-2*04'.
-      level (str): one of GENE_MATCH_LEVELS.
 
     Returns:
-      dict: name (the gene, or the family under 'family') to the set of its
-      alleles -- None standing for "any allele" at 'gene'/'family' level; at
-      'allele' level a gene level name keeps its key with no allele, so it
-      can never agree. Empty when the cell is blank or names no recognizable
-      gene.
-
-    Raises:
-      AnnotationError: if `level` is not recognized.
+      frozenset: the gene names, alleles dropped (e.g. {'IGHV1-2'}); empty
+      when the cell is blank or names no recognizable gene.
     """
-    _checkLevel(level)
-    names = {}
-    for match in _CALL_REGEX.finditer(call or ''):
-        name, allele = match.group('gene'), match.group('allele')
-        if level == 'family':
-            name = _FAMILY_REGEX.match(name).group(0)
-        alleles = names.setdefault(name, set())
-        if level != 'allele':
-            alleles.add(None)
-        elif allele is not None:
-            alleles.add(allele)
-
-    return names
+    return frozenset(match.group('gene') for match in _CALL_REGEX.finditer(call or ''))
 
 
 def _loci(call):
@@ -126,23 +85,14 @@ def callsAgree(a, b):
     Whether two parsed calls (see parseCall) agree.
 
     Arguments:
-      a (dict): one parsed call.
-      b (dict): the other, parsed at the same level.
+      a (frozenset): one parsed call.
+      b (frozenset): the other.
 
     Returns:
-      bool: True if they share a name with an allele in common -- any
-      allele (None) at 'gene'/'family' level. A blank or unrecognized call
+      bool: True if they name a gene in common. A blank or unrecognized call
       (empty) agrees with nothing.
     """
-    if not a or not b:
-        return False
-
-    for name in a.keys() & b.keys():
-        alleles_a, alleles_b = a[name], b[name]
-        if None in alleles_a or None in alleles_b or alleles_a & alleles_b:
-            return True
-
-    return False
+    return bool(a & b)
 
 
 class GeneGate:
@@ -152,33 +102,28 @@ class GeneGate:
     agrees (callsAgree) on each of them.
     """
 
-    def __init__(self, queries, reference, gene_cols, level='gene'):
+    def __init__(self, queries, reference, gene_cols):
         """
         Arguments:
           queries (pandas.DataFrame): the query rows, in result order.
           reference (pandas.DataFrame): the reference rows, by position.
           gene_cols (list): gene call columns to gate on, e.g.
             ['v_call', 'j_call'].
-          level (str): one of GENE_MATCH_LEVELS.
-
-        Raises:
-          AnnotationError: if `level` is not recognized.
         """
-        _checkLevel(level)
-        self.query_calls = [self._parseColumn(queries, col, level, 'query')
+        self.query_calls = [self._parseColumn(queries, col, 'query')
                             for col in gene_cols]
-        self.ref_calls = [self._parseColumn(reference, col, level, 'reference')
+        self.ref_calls = [self._parseColumn(reference, col, 'reference')
                           for col in gene_cols]
 
     @staticmethod
-    def _parseColumn(frame, col, level, label):
+    def _parseColumn(frame, col, label):
         """
         Returns:
           list: parseCall of every value of `frame[col]`, in row order --
           each distinct value parsed once.
         """
         values = frame[col].fillna('').astype(str).tolist()
-        parsed = {value: parseCall(value, level) for value in set(values)}
+        parsed = {value: parseCall(value) for value in set(values)}
         unparsed = sum(1 for value in values if value.strip() and not parsed[value])
         if unparsed:
             log.warning("%d %s %s values name no recognizable gene; those rows "
@@ -212,14 +157,13 @@ class GeneGate:
                               dtype=bool, count=len(query_rows))
 
 
-def buildGeneGate(queries, reference, gene_cols, level='gene'):
+def buildGeneGate(queries, reference, gene_cols):
     """
     Returns:
-      GeneGate: for `gene_cols` at `level`, or None when `gene_cols` is
-      empty or None -- no gene gate at all.
+      GeneGate: for `gene_cols`, or None when `gene_cols` is empty or None
+      -- no gene gate at all.
     """
     if not gene_cols:
-        _checkLevel(level)
         return None
 
-    return GeneGate(queries, reference, gene_cols, level)
+    return GeneGate(queries, reference, gene_cols)

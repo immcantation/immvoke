@@ -42,8 +42,7 @@ the same options, as file paths or DataFrames, and returns the result table.
 | --- | --- | --- | --- |
 | `--query`, `--reference` | `query`, `reference` | AIRR TSV (or DataFrame in Python) | the tables to match |
 | `--sequence-region` | `sequence_region` | `CDR3` (default), `VDJ`, `CDRs` | compare `cdr3_aa`; `sequence_aa`; or CDR1-3 pooled |
-| `--partition-by` | `partition_by` | unset (default), `V`, `VJ`, `VJL` | only compare pairs with the same V-gene; V- and J-gene; or V-gene, J-gene and CDR3 length |
-| `--gene-match` | `gene_match` | `allele`, `gene` (default), `family` | how V/J-gene calls must agree |
+| `--partition-by` | `partition_by` | unset (default), `V`, `VJ`, `VJL` | only compare pairs with the same V-gene; V- and J-gene; or V-gene, J-gene and CDR3 length (same gene, any allele) |
 | `--identity-threshold` | `identity_threshold` | unset (exact), or a fraction in (0, 1] | e.g. `0.9` allows up to 10% of the query's positions to differ |
 | `--distance-metric` | `distance_metric` | `hamming` (default), `levenshtein` | substitutions only, or substitutions, insertions and deletions |
 | `--paired` | `paired` | flag | match heavy and light chain of the same reference antibody |
@@ -68,11 +67,6 @@ immvoke annotate --query mine.tsv --reference tmp/specificity/bcr.tsv \
 # same V+J gene, CDR3 at 85% amino acid identity (Hamming distance)
 immvoke annotate --query mine.tsv --reference tmp/specificity/bcr.tsv \
     --partition-by VJ --identity-threshold 0.85 -o annotated.tsv
-
-# as above, but the V and J alleles must agree too
-immvoke annotate --query mine.tsv --reference tmp/specificity/bcr.tsv \
-    --partition-by VJ --gene-match allele --identity-threshold 0.85 \
-    -o annotated.tsv
 
 # CDR1-3 pooled at 90% identity, same V-gene, J-gene and CDR3 length
 immvoke annotate --query mine.tsv --reference tmp/specificity/bcr.tsv \

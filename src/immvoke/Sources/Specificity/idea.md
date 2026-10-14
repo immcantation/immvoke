@@ -18,14 +18,14 @@ graph TD
     R[Reference Dataset <br>AIRR, e.g. IEDB]:::input --> Paired
     Paired{Paired?}:::decision
 
-    Paired -->|True| PairedRun[Heavy + light chain match <br>V, J at gene_match level, exact CDR3 <br>via symscan]:::process
+    Paired -->|True| PairedRun[Heavy + light chain match <br>same V, J gene, exact CDR3 <br>via symscan]:::process
     PairedRun --> PairedOut[Per-antibody result, one row per cell_id: <br>both / heavy_only / light_only / conflicting / neither]:::process
 
     Paired -->|False| Heavy[Keep heavy chain IGH rows]:::process
     Heavy --> Pre[Select sequence region: <br>CDR3, VDJ, CDRs]:::process
     Pre --> Part{partition_by?}:::decision
     Part -->|None| Global[Global sequence pool]:::process
-    Part -->|V, VJ, VJL| Binned[Gene / length gated pools <br>gene_match: allele, gene, family]:::process
+    Part -->|V, VJ, VJL| Binned[Gene / length gated pools <br>same gene, any allele]:::process
     Global --> Thresh{identity_threshold?}:::decision
     Binned --> Thresh
 
@@ -85,14 +85,9 @@ J-gene) agree; `VJL` also requires the same CDR3 length, and so needs
 **Gene names.** `v_call`/`j_call` cells are not always one clean name: IEDB
 mixes allele calls (`IGHV1-2*02`), gene calls (`IGHV1-2`), several calls in
 one cell (`IGHV1-2*02, IGHV1-2*04`) and blanks. They are parsed with
-Change-O's gene pattern (`Genes.py`) and compared exactly at the
-`gene_match` level:
-
-| `gene_match` | Agrees | Disagrees |
-| --- | --- | --- |
-| `allele` | `IGHV1-2*02` / `IGHV1-2*02` | `IGHV1-2*02` / `IGHV1-2*04`; `IGHV1-2*02` / `IGHV1-2` (no allele: a gene level match only) |
-| `gene` (default) | `IGHV1-2*02` / `IGHV1-2*04` / `IGHV1-2` | `IGHV1-2` / `IGHV1-69` |
-| `family` | `IGHV1-2*02` / `IGHV1-69*01` | `IGHV1-2` / `IGHV3-23` |
+Change-O's gene pattern (`Genes.py`) and compared by exact gene name,
+whatever the allele: `IGHV1-2*02`, `IGHV1-2*04` and `IGHV1-2` all agree,
+while `IGHV1-2` and `IGHV1-69` do not.
 
 A cell with several calls agrees if any one of them does. A blank or
 unrecognized call **agrees with nothing**, not even another blank; the
@@ -112,7 +107,7 @@ Levenshtein it is an ordinary letter.
 
 **Paired.** An antibody is its heavy (`IGH`) and light (`IGK`/`IGL`) chain
 rows sharing one `cell_id`. It matches a reference antibody only if that
-*same* antibody agrees on V-gene and J-gene (at the `gene_match` level) and
+*same* antibody agrees on V-gene and J-gene (same gene, any allele) and
 exact CDR3 on both chains; a heavy hit on one reference antibody and a light
 hit on another is `conflicting`, not `both`. Region, partition, threshold
 and metric do not apply.

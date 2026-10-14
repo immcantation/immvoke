@@ -130,7 +130,7 @@ REGION_COLUMNS = {'CDR3': ['cdr3_aa'], 'VDJ': ['sequence_aa'],
 
 def bruteForceSpecificity(queries, reference, sequence_region='CDR3',
                           partition_by=None, identity_threshold=None,
-                          distance_metric='hamming', gene_match='gene'):
+                          distance_metric='hamming'):
     """
     annotateSpecificity's single-chain result table, by brute force: the
     same heavy chain filter, columns, gates and threshold, every pair
@@ -156,8 +156,7 @@ def bruteForceSpecificity(queries, reference, sequence_region='CDR3',
         queries, reference, REGION_COLUMNS[sequence_region],
         0 if exact else 1 - identity_threshold,
         distance_type='hamming' if exact else distance_metric, id_col='sequence_id',
-        exact_cols=exact_cols, threshold_is_fraction=not exact, gene_cols=gene_cols,
-        gene_match=gene_match)
+        exact_cols=exact_cols, threshold_is_fraction=not exact, gene_cols=gene_cols)
 
 
 def heavy(sequence_id, cdr3_aa, v_call='IGHV1', j_call='IGHJ1', **extra):
@@ -313,7 +312,7 @@ class TestAnnotateSpecificity(unittest.TestCase):
             written = pandas.read_csv(tmp / 'sub' / 'out.tsv', sep='\t')
             self.assertEqual(written['hit_ids'].tolist(), result['hit_ids'].tolist())
 
-    def test_gene_match_levels_under_partition_by(self):
+    def test_genes_match_by_name_any_allele(self):
         queries = [heavy('q1', 'CARDYW', v_call='IGHV1-2*02', j_call='IGHJ4*02')]
         reference = [
             heavy('sameAllele', 'CARDYW', v_call='IGHV1-2*02', j_call='IGHJ4*02'),
@@ -325,25 +324,12 @@ class TestAnnotateSpecificity(unittest.TestCase):
             heavy('sameFamily', 'CARDYW', v_call='IGHV1-69*01', j_call='IGHJ4*02'),
             heavy('otherFamily', 'CARDYW', v_call='IGHV3-23*01', j_call='IGHJ4*02'),
         ]
-        expected = {
-            # geneOnly carries no allele: a gene level match only
-            'allele': {'sameAllele'},
-            # blankJ: a blank call agrees with nothing, at any level
-            'gene': {'sameAllele', 'otherAllele', 'geneOnly', 'several'},
-            'family': {'sameAllele', 'otherAllele', 'geneOnly', 'several',
-                       'sameFamily'},
-        }
-        for level, ids in expected.items():
-            with self.subTest(gene_match=level):
-                hits = self._hits(queries, reference, partition_by='VJ',
-                                  gene_match=level)
-                self.assertEqual(set(hits[0].split(';')), ids)
 
-    def test_gene_match_default_is_gene(self):
-        hits = self._hits([heavy('q1', 'CARDYW', v_call='IGHV1-2*02')],
-                          [heavy('ref1', 'CARDYW', v_call='IGHV1-2*04')],
-                          partition_by='V')
-        self.assertEqual(hits, ['ref1'])
+        hits = self._hits(queries, reference, partition_by='VJ')
+
+        # blankJ: a blank call agrees with nothing; sameFamily: another gene
+        self.assertEqual(set(hits[0].split(';')),
+                         {'sameAllele', 'otherAllele', 'geneOnly', 'several'})
 
     def test_messy_gene_calls_match_brute_force(self):
         calls = ['IGHV1-2*02', 'IGHV1-2*04', 'IGHV1-2', '', 'IGVL3-10',
@@ -354,30 +340,31 @@ class TestAnnotateSpecificity(unittest.TestCase):
         reference = [heavy('r%d' % i, cdr3, v_call=calls[(i + 2) % len(calls)],
                            j_call=('IGHJ4', 'IGHJ4*02', '')[i % 3])
                      for i, cdr3 in enumerate(['CARDYW', 'CARQYW', 'CARDYY', 'CQ'] * 3)]
-        for level in ('allele', 'gene', 'family'):
-            for mode in ({}, {'identity_threshold': 0.8},
-                         {'identity_threshold': 0.8, 'distance_metric': 'levenshtein'}):
-                with self.subTest(gene_match=level, **mode):
-                    kwargs = dict(partition_by='VJ', gene_match=level, **mode)
-                    result = annotateSpecificity(frame(queries), airr(reference),
-                                                 **kwargs)
-                    pandas.testing.assert_frame_equal(
-                        result, bruteForceSpecificity(queries, reference, **kwargs),
-                        check_dtype=False)
+        for mode in ({}, {'identity_threshold': 0.8},
+                     {'identity_threshold': 0.8, 'distance_metric': 'levenshtein'}):
+            with self.subTest(**mode):
+                kwargs = dict(partition_by='VJ', **mode)
+                result = annotateSpecificity(frame(queries), airr(reference), **kwargs)
+                pandas.testing.assert_frame_equal(
+                    result, bruteForceSpecificity(queries, reference, **kwargs),
+                    check_dtype=False)
 
-    def test_paired_compares_genes_at_gene_match_level(self):
+    def test_paired_compares_genes_by_name(self):
         rows = [dict(cell_id='ab1', locus='IGH', cdr3_aa='CARDYW', v_call='IGHV1-2*02',
                      j_call='IGHJ4*02'),
                 dict(cell_id='ab1', locus='IGK', cdr3_aa='CQQYNS', v_call='IGKV1-39*01',
                      j_call='IGKJ1*01')]
-        reference = [dict(rows[0], cell_id='refA', v_call='IGHV1-2*04'),
+        same_gene = [dict(rows[0], cell_id='refA', v_call='IGHV1-2*04'),
                      dict(rows[1], cell_id='refA')]
+        other_gene = [dict(rows[0], cell_id='refA', v_call='IGHV1-69*01'),
+                      dict(rows[1], cell_id='refA')]
 
-        for level, classification in (('gene', 'both'), ('allele', 'light_only')):
-            with self.subTest(gene_match=level):
-                result = annotateSpecificity(frame(rows), airr(reference),
-                                             paired=True, gene_match=level)
+        for reference, classification in ((same_gene, 'both'),
+                                          (other_gene, 'light_only')):
+            with self.subTest(classification):
+                result = annotateSpecificity(frame(rows), airr(reference), paired=True)
                 self.assertEqual(result['classification'].tolist(), [classification])
+        reference = same_gene
 
         # A blank J-gene call agrees with nothing, so the light chain cannot match.
         blank_j = [rows[0], dict(rows[1], j_call='')]
@@ -403,7 +390,7 @@ class TestAnnotateSpecificity(unittest.TestCase):
     def test_invalid_arguments_raise(self):
         queries = [heavy('q1', 'CARDYW', cdr1_aa='GFT', cdr2_aa='ISY')]
         cases = [{'sequence_region': 'CDR4'}, {'partition_by': 'J'},
-                 {'distance_metric': 'blosum'}, {'gene_match': 'segment'},
+                 {'distance_metric': 'blosum'},
                  {'identity_threshold': 0}, {'identity_threshold': 1.5},
                  {'sequence_region': 'CDRs', 'identity_threshold': 0.9,
                   'distance_metric': 'levenshtein'},
@@ -519,23 +506,22 @@ class TestAnnotateCli(unittest.TestCase):
         text = out.getvalue()
         for flag in ('--query', '--reference', '--sequence-region', '--partition-by',
                      '--paired', '--identity-threshold', '--distance-metric',
-                     '--gene-match', '--threads', '--out'):
+                     '--threads', '--out'):
             self.assertIn(flag, text)
-        for gone in ('--backend', 'compairr', 'python'):
+        for gone in ('--backend', '--gene-match', 'compairr', 'python'):
             self.assertNotIn(gone, text.lower())
 
     def test_defaults(self):
         args = getArgParser().parse_args(self.BASE)
 
         self.assertEqual((args.sequence_region, args.partition_by, args.paired,
-                          args.identity_threshold, args.distance_metric,
-                          args.gene_match),
-                         ('CDR3', None, False, None, 'hamming', 'gene'))
+                          args.identity_threshold, args.distance_metric),
+                         ('CDR3', None, False, None, 'hamming'))
 
     def test_invalid_choices_are_rejected(self):
         for extra in (['--backend', 'symscan'], ['--partition-by', 'J'],
                       ['--sequence-region', 'CDR4'], ['--distance-metric', 'x'],
-                      ['--gene-match', 'segment']):
+                      ['--gene-match', 'gene']):
             with self.subTest(extra=extra), \
                  mock.patch('sys.stderr', new_callable=io.StringIO), \
                  self.assertRaises(SystemExit):
@@ -549,8 +535,7 @@ class TestAnnotateCli(unittest.TestCase):
     def test_handle_annotate_forwards_every_flag(self):
         args = getArgParser().parse_args(self.BASE + [
             '--sequence-region', 'CDRs', '--partition-by', 'VJL',
-            '--identity-threshold', '0.9', '--gene-match', 'allele',
-            '--threads', '4'])
+            '--identity-threshold', '0.9', '--threads', '4'])
 
         with mock.patch('immvoke.Sources.Specificity.AnnotateCli.annotateSpecificity') \
                 as annotate:
@@ -559,7 +544,7 @@ class TestAnnotateCli(unittest.TestCase):
         annotate.assert_called_once_with(
             query=Path('q.tsv'), reference=Path('r.tsv'), sequence_region='CDRs',
             partition_by='VJL', paired=False, identity_threshold=0.9,
-            distance_metric='hamming', gene_match='allele', threads=4,
+            distance_metric='hamming', threads=4,
             output=Path('o.tsv'))
 
     def test_end_to_end(self):

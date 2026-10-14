@@ -18,8 +18,8 @@ reference is never hit.
 
 Gates. symscan has no gate of its own: `exact_cols` (exact string
 agreement), each column's length for a pooled multi-column Hamming
-comparison, and `gene_cols` (V/J-gene agreement at `gene_match` level, see
-Genes.py) are applied to the pairs it returns -- distance first, gates
+comparison, and `gene_cols` (V/J-gene agreement, same gene and any allele,
+see Genes.py) are applied to the pairs it returns -- distance first, gates
 second.
 
 The "X" wildcard. An X is an unresolved residue: under 'hamming' (and so
@@ -299,7 +299,7 @@ def _symscanPairs(query_seqs, ref_seqs, limits, distance_type, query_rows,
 def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
                          distance_type='hamming', id_col=DEFAULT_ID_COL,
                          exact_cols=None, threshold_is_fraction=False, threads=1,
-                         gene_cols=None, gene_match='gene'):
+                         gene_cols=None):
     """
     Annotate each query row against `reference` allowing up to
     `max_distance` differences in `compare_cols`, via
@@ -329,10 +329,9 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
         the query's length instead of a fixed count.
       threads (int): rayon worker threads (-1 for every available core);
         only the first call in a process sets this -- see the module note.
-      gene_cols (list): gene call columns that must agree at `gene_match`
-        level, e.g. `['v_call', 'j_call']`; blank or unrecognized calls
-        agree with anything (see Genes.py). None for no such gate.
-      gene_match (str): 'allele', 'gene' or 'family'; see Genes.py.
+      gene_cols (list): gene call columns that must name the same gene
+        (any allele), e.g. `['v_call', 'j_call']`; a blank or unrecognized
+        call agrees with nothing (see Genes.py). None for no such gate.
 
     Returns:
       pandas.DataFrame: one row per query row, columns `query_row`,
@@ -447,7 +446,7 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
         keep = dists <= limits[rows]
         rows, cols, dists = rows[keep], cols[keep], dists[keep]
 
-    gate = buildGeneGate(queries, reference, gene_cols, gene_match)
+    gate = buildGeneGate(queries, reference, gene_cols)
     if gate is not None:
         keep = gate.keep(rows, cols)
         rows, cols, dists = rows[keep], cols[keep], dists[keep]

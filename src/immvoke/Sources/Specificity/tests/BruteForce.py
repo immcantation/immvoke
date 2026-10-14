@@ -52,8 +52,7 @@ def _levenshtein(a, b):
 
 def bruteForceAnnotation(queries, reference, compare_cols, max_distance,
                          distance_type='hamming', id_col='id', exact_cols=None,
-                         threshold_is_fraction=False, gene_cols=None,
-                         gene_match='gene'):
+                         threshold_is_fraction=False, gene_cols=None):
     """
     The result table runSymscanAnnotation must produce, by brute force.
 
@@ -68,7 +67,7 @@ def bruteForceAnnotation(queries, reference, compare_cols, max_distance,
     ref_values = list(reference[compare_cols].fillna('').itertuples(index=False,
                                                                    name=None))
     exact = exact_cols or []
-    gate = GeneGate(queries, reference, gene_cols, gene_match) if gene_cols else None
+    gate = GeneGate(queries, reference, gene_cols) if gene_cols else None
 
     rows = []
     for q, values in enumerate(query_values):

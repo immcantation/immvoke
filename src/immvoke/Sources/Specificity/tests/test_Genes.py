@@ -12,7 +12,6 @@ import numpy
 import pandas
 
 # Immvoke imports
-from immvoke.Exceptions import AnnotationError
 from immvoke.Sources.Specificity.Genes import (
     GeneGate,
     callsAgree,
@@ -21,29 +20,26 @@ from immvoke.Sources.Specificity.Genes import (
 )
 
 
-def agree(a, b, level):
-    return callsAgree(parseCall(a, level), parseCall(b, level))
+def agree(a, b):
+    return callsAgree(parseCall(a), parseCall(b))
 
 
 class TestParseCall(unittest.TestCase):
     """
-    Tests for reading the names out of one gene call cell
+    Tests for reading the gene names out of one gene call cell
     """
 
-    def test_levels(self):
-        call = 'IGHV1-2*02'
-        self.assertEqual(parseCall(call, 'allele'), {'IGHV1-2': {'02'}})
-        self.assertEqual(parseCall(call, 'gene'), {'IGHV1-2': {None}})
-        self.assertEqual(parseCall(call, 'family'), {'IGHV1': {None}})
+    def test_the_allele_is_dropped(self):
+        self.assertEqual(parseCall('IGHV1-2*02'), {'IGHV1-2'})
+        self.assertEqual(parseCall('IGHV1-2'), {'IGHV1-2'})
 
     def test_several_calls_in_one_cell(self):
-        self.assertEqual(parseCall('IGHV5-9*01, IGHV5-9*03, IGHV5-9-5*01', 'allele'),
-                         {'IGHV5-9': {'01', '03'}, 'IGHV5-9-5': {'01'}})
+        self.assertEqual(parseCall('IGHV5-9*01, IGHV5-9*03, IGHV5-9-5*01'),
+                         {'IGHV5-9', 'IGHV5-9-5'})
 
-    def test_a_gene_level_name_has_no_allele(self):
-        """Not gene 'IGHV1' allele '2', as Change-O's allele pattern reads it --
-        and, at allele level, nothing to agree on."""
-        self.assertEqual(parseCall('IGHV1-2', 'allele'), {'IGHV1-2': set()})
+    def test_a_gene_level_name_is_not_read_as_an_allele(self):
+        """Not gene 'IGHV1' allele '2', as Change-O's allele pattern reads it."""
+        self.assertEqual(parseCall('IGHV1-2'), {'IGHV1-2'})
 
     def test_names_change_o_parses(self):
         for call, gene in [('IGHV3/OR16-10*02', 'IGHV3/OR16-10'),
@@ -52,51 +48,34 @@ class TestParseCall(unittest.TestCase):
                            ('IGHV3-30-3*01', 'IGHV3-30-3'),
                            ('TRBV20-1*01', 'TRBV20-1')]:
             with self.subTest(call):
-                self.assertEqual(list(parseCall(call, 'gene')), [gene])
+                self.assertEqual(parseCall(call), {gene})
 
-    def test_blank_or_unrecognized_is_unknown(self):
+    def test_blank_or_unrecognized_names_nothing(self):
         for call in ('', None, 'IGVL3-10', 'unknown'):
             with self.subTest(call):
-                self.assertEqual(parseCall(call, 'gene'), {})
-
-    def test_unknown_level_raises(self):
-        with self.assertRaises(AnnotationError):
-            parseCall('IGHV1-2*02', 'segment')
+                self.assertEqual(parseCall(call), frozenset())
 
 
 class TestCallsAgree(unittest.TestCase):
     """
-    Tests for whether two cells name the same gene at each level
+    Tests for whether two cells name the same gene, any allele
     """
 
-    def test_allele_level(self):
-        self.assertTrue(agree('IGHV1-2*02', 'IGHV1-2*02', 'allele'))
-        self.assertFalse(agree('IGHV1-2*02', 'IGHV1-2*04', 'allele'))
-        # a gene level call is a gene level match, never an allele level one
-        self.assertFalse(agree('IGHV1-2*02', 'IGHV1-2', 'allele'))
-        self.assertFalse(agree('IGHV1-2', 'IGHV1-2', 'allele'))
-        self.assertTrue(agree('IGHV1-2, IGHV1-2*02', 'IGHV1-2*02', 'allele'))
-
-    def test_gene_level(self):
-        self.assertTrue(agree('IGHV1-2*02', 'IGHV1-2*04', 'gene'))
-        self.assertTrue(agree('IGHV1-2*02', 'IGHV1-2', 'gene'))
-        self.assertFalse(agree('IGHV1-2*02', 'IGHV1-69*01', 'gene'))
-        self.assertFalse(agree('IGHV1-69*01', 'IGHV1-69D*01', 'gene'))
-
-    def test_family_level(self):
-        self.assertTrue(agree('IGHV1-2*02', 'IGHV1-69*01', 'family'))
-        self.assertFalse(agree('IGHV1-2*02', 'IGHV3-23*01', 'family'))
+    def test_same_gene_any_allele(self):
+        self.assertTrue(agree('IGHV1-2*02', 'IGHV1-2*04'))
+        self.assertTrue(agree('IGHV1-2*02', 'IGHV1-2'))
+        self.assertFalse(agree('IGHV1-2*02', 'IGHV1-69*01'))
+        self.assertFalse(agree('IGHV1-69*01', 'IGHV1-69D*01'))
 
     def test_any_shared_call_agrees(self):
-        self.assertTrue(agree('IGHV3-23*01, IGHV1-2*02', 'IGHV1-2*02', 'allele'))
-        self.assertFalse(agree('IGHV3-23*01, IGHV1-2*02', 'IGHV1-69*01', 'gene'))
+        self.assertTrue(agree('IGHV3-23*01, IGHV1-2*02', 'IGHV1-2*04'))
+        self.assertFalse(agree('IGHV3-23*01, IGHV1-2*02', 'IGHV1-69*01'))
 
     def test_blank_or_unrecognized_agrees_with_nothing(self):
-        for level in ('allele', 'gene', 'family'):
-            for other in ('IGHV1-2*02', '', 'IGVL3-10'):
-                with self.subTest(level=level, other=other):
-                    self.assertFalse(agree('', other, level))
-                    self.assertFalse(agree('IGVL3-10', other, level))
+        for other in ('IGHV1-2*02', '', 'IGVL3-10'):
+            with self.subTest(other=other):
+                self.assertFalse(agree('', other))
+                self.assertFalse(agree('IGVL3-10', other))
 
 
 class TestInferLocus(unittest.TestCase):
@@ -134,7 +113,7 @@ class TestGeneGate(unittest.TestCase):
             {'v_call': 'IGHV1-2', 'j_call': ''},              # J blank
         ])
 
-        gate = GeneGate(queries, reference, ['v_call', 'j_call'], 'gene')
+        gate = GeneGate(queries, reference, ['v_call', 'j_call'])
 
         keep = gate.keep(numpy.array([0, 0, 0]), numpy.array([0, 1, 2]))
         self.assertEqual(keep.tolist(), [True, False, False])

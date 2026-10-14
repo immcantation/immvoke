@@ -341,8 +341,7 @@ class TestSymscanMatchesBruteForce(unittest.TestCase):
                  (['cdr3'], 2, {'exact_cols': ['j_call']}),
                  (['cdr1', 'cdr3'], 2, {'gene_cols': ['v_call']}),
                  (['cdr3'], 0.34, {'threshold_is_fraction': True,
-                                   'gene_cols': ['v_call', 'j_call'],
-                                   'gene_match': 'allele'}),
+                                   'gene_cols': ['v_call', 'j_call']}),
                  (['cdr1', 'cdr3'], 0.25, {'threshold_is_fraction': True})]
         for seed in range(5):
             queries, reference = self._tables(seed)

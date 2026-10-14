@@ -9,7 +9,7 @@ rearrangement TSV (`immvoke specificity bcr`), then annotate a user's own
 AIRR table against it as the reference.
 
 annotateSpecificity() is the entry point `immvoke annotate` wraps: it picks
-the comparison from a few knobs (sequence_region, partition_by, gene_match,
+the comparison from a few knobs (sequence_region, partition_by,
 paired, identity_threshold, distance_metric) -- see its section at the end of
 this module -- and runs it through Symscan.runSymscanAnnotation, symscan's
 symmetric-deletion index. There is no other matching engine: rows too large
@@ -21,7 +21,7 @@ runs it once per chain (heavy, light) and reconciles the two per antibody,
 classifying each as agreeing with the same reference antibody on both
 chains, one chain only, or neither.
 
-V/J-gene agreement goes through Genes.py (`gene_cols`/`gene_match`), which
+V/J-gene agreement goes through Genes.py (`gene_cols`), which
 parses gene calls rather than comparing them as strings; `exact_cols`
 compares plain strings. Substitution-matrix-weighted (BLOSUM) annotation is
 not included.
@@ -38,7 +38,7 @@ import pandas
 
 # Immvoke imports
 from immvoke.Exceptions import AnnotationError
-from immvoke.Sources.Specificity.Genes import GENE_MATCH_LEVELS, inferLocus
+from immvoke.Sources.Specificity.Genes import inferLocus
 
 log = logging.getLogger(__name__)
 
@@ -178,7 +178,7 @@ def _hitsByCellId(query_chain, chain_result, cell_id_col):
 
 def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
                              vgene_col='v_call', jgene_col='j_call',
-                             threads=1, gene_match='gene'):
+                             threads=1):
     """
     Classify each query antibody by whether the *same* reference antibody
     agrees with it on the heavy chain, the light chain, both, or neither.
@@ -186,7 +186,7 @@ def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
     An antibody is two rows of an AIRR table -- a heavy chain and, where
     present, a light chain -- sharing one `cell_id` and told apart by
     `locus` (`IGH` for heavy, `IGK`/`IGL` for light). Agreement on a chain
-    is the same V-gene and J-gene (at `gene_match` level, see Genes.py) and
+    is the same V-gene and J-gene (any allele, see Genes.py) and
     exact CDR3, run once for the heavy rows and once for the light rows; a
     reference antibody counts toward "both" only if its `cell_id` appears in
     *both* chains' hit sets for the query antibody, not merely in each
@@ -202,8 +202,6 @@ def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
       vgene_col (str): the V-gene call column.
       jgene_col (str): the J-gene call column.
       threads (int): symscan's thread pool; see Symscan.runSymscanAnnotation.
-      gene_match (str): 'allele', 'gene' or 'family' -- how V/J-gene calls
-        are compared; blank or unrecognized calls agree with nothing.
 
     Returns:
       pandas.DataFrame: one row per query `cell_id`: `classification` (one
@@ -229,7 +227,7 @@ def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
     def _exact(query_chain, reference_chain):
         return runSymscanAnnotation(query_chain, reference_chain, [cdr3_col], 0,
                                     id_col=CELL_ID_COL, gene_cols=gene_cols,
-                                    gene_match=gene_match, threads=threads)
+                                    threads=threads)
 
     heavy_result = _exact(query_heavy, reference_heavy)
     light_result = _exact(query_light, reference_light)
@@ -270,7 +268,7 @@ def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
 # A file-or-DataFrame-in, DataFrame-and-file-out entry point, for a caller
 # who wants "match this receptor table against that reference table". It
 # picks the comparison from a small set of knobs (sequence_region,
-# partition_by, gene_match, identity_threshold, distance_metric) -- the flow
+# partition_by, identity_threshold, distance_metric) -- the flow
 # `immvoke annotate` exposes on the commandline:
 #
 #     paired  -> runPairedExactAnnotation (V, J, exact CDR3 on both chains)
@@ -289,8 +287,8 @@ SEQUENCE_REGION_COLUMNS = {
     'cdrs': ('cdr1_aa', 'cdr2_aa', 'cdr3_aa'),
 }
 
-#: partition_by -> gene call columns two rows must agree on (at gene_match
-#: level, see Genes.py) before their sequence counts as a hit. 'VJL' also
+#: partition_by -> gene call columns two rows must agree on (same gene, any
+#: allele; see Genes.py) before their sequence counts as a hit. 'VJL' also
 #: gates on exact CDR3 length; see annotateSpecificity.
 PARTITION_GENE_COLUMNS = {
     'v': ('v_call',),
@@ -493,7 +491,7 @@ def _requireAirr(frame, label):
 
 
 def _runSingleChain(queries, reference, compare_cols, gene_cols, exact_cols,
-                    gene_match, threshold, metric, threads):
+                    threshold, metric, threads):
     """
     Run one single-chain comparison through symscan.
 
@@ -501,10 +499,9 @@ def _runSingleChain(queries, reference, compare_cols, gene_cols, exact_cols,
       queries (pandas.DataFrame): the query rows, already filtered.
       reference (pandas.DataFrame): the reference rows, already filtered.
       compare_cols (list): the column(s) to compare.
-      gene_cols (list): gene call columns that must agree at `gene_match`
-        level, possibly empty.
+      gene_cols (list): gene call columns that must name the same gene,
+        possibly empty.
       exact_cols (list): columns that must agree exactly, possibly empty.
-      gene_match (str): 'allele', 'gene' or 'family'.
       threshold (float): identity in (0.0, 1.0]; 1.0 is an exact match.
       metric (str): 'hamming' or 'levenshtein'.
       threads (int): symscan's thread pool; see annotateSpecificity.
@@ -519,7 +516,7 @@ def _runSingleChain(queries, reference, compare_cols, gene_cols, exact_cols,
     distance_type = 'hamming' if exact else metric
     tolerance = 0 if exact else 1 - threshold
     gates = dict(id_col=DEFAULT_ID_COL, exact_cols=exact_cols or None,
-                 gene_cols=gene_cols or None, gene_match=gene_match)
+                 gene_cols=gene_cols or None)
 
     # Deferred: Symscan builds on this module's helpers.
     from immvoke.Sources.Specificity.Symscan import runSymscanAnnotation
@@ -549,7 +546,7 @@ def _writeIfRequested(result, output):
 
 def annotateSpecificity(query, reference, sequence_region='CDR3',
                         partition_by=None, paired=False, identity_threshold=None,
-                        distance_metric='hamming', gene_match='gene', threads=1,
+                        distance_metric='hamming', threads=1,
                         output=None):
     """
     Annotate a query receptor table against a reference specificity table.
@@ -575,11 +572,6 @@ def annotateSpecificity(query, reference, sequence_region='CDR3',
         with the same reference antibody (runPairedExactAnnotation). When
         False, only heavy chain (locus IGH) rows are compared; a table
         without a locus column is compared whole.
-      gene_match (str): how `partition_by` and `paired` compare v_call/
-        j_call: 'allele' (same gene and allele), 'gene' (the default: same
-        gene, any allele) or 'family'. A row with several calls agrees if
-        any one does; a blank or unrecognized call agrees with nothing. See
-        Genes.py.
       identity_threshold (float): minimum sequence identity in (0.0, 1.0];
         None or 1.0 requires an exact match, a lower value allows up to
         floor((1 - identity_threshold) * query length) differences. Ignored
@@ -606,9 +598,6 @@ def annotateSpecificity(query, reference, sequence_region='CDR3',
         (e.g. 'CDRs' under 'levenshtein'). Rows beyond symscan's limits are
         skipped with a warning instead (see Symscan.py).
     """
-    if gene_match not in GENE_MATCH_LEVELS:
-        raise AnnotationError('unknown gene_match %r; choose one of: %s'
-                              % (gene_match, ', '.join(GENE_MATCH_LEVELS)))
     queries = _readAirrTsv(query)
     ref = _readAirrTsv(reference)
     _requireAirr(ref, 'reference')
@@ -628,8 +617,7 @@ def annotateSpecificity(query, reference, sequence_region='CDR3',
             if not frame[LOCUS_COL].isin(chain_loci).any():
                 raise AnnotationError('%s has no antibody chain rows (locus %s) '
                                       'to pair' % (label, ', '.join(chain_loci)))
-        result = runPairedExactAnnotation(queries, ref, threads=threads,
-                                          gene_match=gene_match)
+        result = runPairedExactAnnotation(queries, ref, threads=threads)
         log.info('%d query antibodies: %s', len(result),
                  ', '.join('%s=%d' % (label, count) for label, count
                           in result['classification'].value_counts().items()))
@@ -665,7 +653,7 @@ def annotateSpecificity(query, reference, sequence_region='CDR3',
         exact_cols = [_CDR3_LENGTH_COL]
 
     result = _runSingleChain(queries, ref, compare_cols, gene_cols, exact_cols,
-                             gene_match, threshold, metric, threads)
+                             threshold, metric, threads)
     hit = int(result['n_hits_total'].gt(0).sum())
     log.info('%d query rows, %d with at least one hit, %d unique (0 or 1 hit)',
              len(result), hit, int(result['is_unique_hit'].sum()))

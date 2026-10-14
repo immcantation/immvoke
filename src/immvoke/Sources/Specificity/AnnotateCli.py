@@ -26,7 +26,6 @@ from pathlib import Path
 # Immvoke imports
 from immvoke.Commandline import CommonHelpFormatter
 from immvoke.Sources.Specificity.Annotate import annotateSpecificity
-from immvoke.Sources.Specificity.Genes import GENE_MATCH_LEVELS
 
 
 def addAnnotateParser(commands):
@@ -64,17 +63,13 @@ def addAnnotateParser(commands):
                         help='only compare row pairs with the same V-gene '
                              '(V), the same V- and J-gene (VJ), or the same '
                              'V-gene, J-gene and CDR3 length (VJL); unset, '
-                             'every row pair is compared')
-    parser.add_argument('--gene-match', dest='gene_match',
-                        choices=GENE_MATCH_LEVELS, default='gene',
-                        help='how --partition-by and --paired compare v_call/'
-                             'j_call: allele (same gene and allele), gene '
-                             '(same gene, any allele) or family. A cell with '
-                             'several calls agrees if any one does; a blank '
-                             'or unrecognized call agrees with none')
+                             'every row pair is compared. Genes match by '
+                             'name, any allele (IGHV1-2*02 = IGHV1-2*04); a '
+                             'cell with several calls agrees if any one does, '
+                             'a blank or unrecognized call never does')
     parser.add_argument('--paired', action='store_true',
-                        help='require V-gene and J-gene agreement (see '
-                             '--gene-match) and exact CDR3 agreement on both '
+                        help='require V-gene and J-gene agreement (same '
+                             'gene, any allele) and exact CDR3 agreement on both '
                              'the heavy and the light chain '
                              'of the same reference antibody, and classify '
                              'each query cell_id as both/heavy_only/'
@@ -122,8 +117,7 @@ def handleAnnotate(args):
         query=args.query, reference=args.reference,
         sequence_region=args.sequence_region, partition_by=args.partition_by,
         paired=args.paired, identity_threshold=args.identity_threshold,
-        distance_metric=args.distance_metric, gene_match=args.gene_match,
-        threads=args.threads,
+        distance_metric=args.distance_metric, threads=args.threads,
         output=args.out)
 
     return 0
