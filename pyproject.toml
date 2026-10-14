@@ -44,10 +44,7 @@ dependencies = [
     # built against numpy 1.x and fail to import under numpy>=2.
     "pyarrow>=16",
     "gdown>=5.0",
-    # runLevenshteinAnnotation uses rapidfuzz.distance.Levenshtein for
-    # indel-tolerant (substitution + insertion + deletion) sequence comparison.
-    "rapidfuzz>=3.0",
-    # Symscan.py: the default annotate backend for exact, Hamming and
+    # Symscan.py: annotate's matching engine for exact, Hamming and
     # Levenshtein matching (a Rust symmetric-deletion index; numpy, which it
     # returns its pairs in, comes with it and with pandas).
     "symscan>=0.8",
