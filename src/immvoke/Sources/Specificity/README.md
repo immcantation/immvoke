@@ -1,31 +1,26 @@
 # Specificity annotations
 
 Annotate your own receptors with antigen specificity from public databases:
-download a reference table, convert it to AIRR, then match your receptors
-against it. How the matching works, step by step, is in [idea.md](idea.md).
+download a reference table in AIRR format, then match your receptors against
+it. How the matching works, step by step, is in [idea.md](idea.md).
 
-## IEDB: download and convert
+## IEDB: download
 
-[IEDB](https://www.iedb.org/) (`Iedb.py`) publishes BCR (antibody) receptor
-sequences as a single table, `bcr`, inside a shared bulk ZIP export.
-
-`bcr` downloads as a schema-validated AIRR rearrangement TSV (plus a
-`.validation.txt` report next to it).
-The bulk export writes one file row per receptor, both chains side by side
-under a two-row header (a category row over a field name row); each row
-becomes one rearrangement record per chain it actually carries (one for a
-single-chain submission, two for a paired one), linked by `cell_id`. Where
-IEDB records a field twice, V/D/J-gene calls take the calculated value (IEDB's
-IMGT standardized call, which it recommends for analysis) and CDRs the curated
-one, each falling back to the other when it is blank.
+[IEDB](https://www.iedb.org/) (`Iedb.py`) publishes its BCR (antibody)
+receptors in AIRR format, as `bcr_full_airr.tsv` inside its bulk
+`airr_full.zip` export, refreshed weekly. `immvoke specificity bcr` downloads
+that table as is -- one rearrangement record per chain, linked by `cell_id`,
+built from IEDB's calculated (IMGT standardized) gene calls and CDRs, with
+the epitope and assay context (`iedb_epitope_name`, `iedb_assay_ids`, ...)
+alongside -- and writes it with a `.validation.txt` report next to it.
 
 ```bash
-# download and convert
 immvoke specificity bcr --outdir tmp
-
-# drop columns the AIRR schema does not define
-immvoke specificity bcr --outdir tmp --strict-airr
 ```
+
+The written `tmp/specificity/bcr.tsv` keeps every column IEDB provides and
+always carries every field the AIRR schema requires; one IEDB lacks is
+written blank.
 
 ## Annotate
 
@@ -109,9 +104,10 @@ With `--paired`, one row per query antibody (`cell_id`): `classification`
 (`both`, `heavy_only`, `light_only`, `conflicting` or `neither`),
 `heavy_hit_ids`, `light_hit_ids` and `both_hit_ids`.
 
-IEDB lists the same receptor once per assay or epitope record, so a
-reference `sequence_id` can stand for several rows; join `hit_ids` back to
-the reference on `sequence_id` to see every epitope behind a hit.
+IEDB lists a receptor once per epitope it was tested against: each record
+gets its own `cell_id`, but the chains keep the receptor's `sequence_id`, so
+one id in `hit_ids` can stand for several reference rows. Join `hit_ids`
+back to the reference on `sequence_id` to see every epitope behind a hit.
 
 Reference command: `immvoke specificity bcr --help`,
 `immvoke annotate --help`.

@@ -3,7 +3,7 @@ schema_version: 1
 harvested: '2026-08-14T00:00:00Z'
 harvested_by: 'immvoke 0.1.0 (hand curated, not scraped: IEDB exposes no HTML form)'
 source_urls:
-  receptor_bulk: https://www.iedb.org/downloader.php?file_name=doc/receptor_full_v3.zip
+  airr_bulk: https://www.iedb.org/downloader.php?file_name=doc/airr_full.zip
   api: https://query-api.iedb.org/api/v1
 field_aliases: {}
 url_rules: {}

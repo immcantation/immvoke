@@ -29,7 +29,8 @@ class TestBcrParser(unittest.TestCase):
 
         text = out.getvalue()
         self.assertIn('--outdir', text)
-        self.assertIn('--strict-airr', text)
+        # IEDB's own columns are always kept; there is nothing to strip.
+        self.assertNotIn('--strict-airr', text)
         # No 'download' verb, no 'iedb' source name -- naming the table is enough.
         self.assertNotIn('download', text.split('\n')[0].lower())
 
@@ -55,11 +56,11 @@ class TestHandleBcr(unittest.TestCase):
             return 0
 
         with mock.patch('immvoke.Cli.handleSpecificityDownload', side_effect=_fake):
-            status = handleBcr(Namespace(outdir=Path('somewhere'), strict_airr=True))
+            status = handleBcr(Namespace(outdir=Path('somewhere')))
 
         self.assertEqual(status, 0)
         self.assertEqual(seen['db'], 'iedb')
         self.assertEqual(seen['table'], 'bcr')
         self.assertEqual(seen['outdir'], Path('somewhere'))
-        self.assertTrue(seen['strict_airr'])
+        self.assertFalse(seen['strict_airr'])
         self.assertFalse(seen['dry_run'])

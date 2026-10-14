@@ -123,9 +123,9 @@ and metric do not apply.
 
 ## Current limits
 
-- Only IEDB's `bcr` table is converted to AIRR so far; CoV-AbDab and ASD
-  are still downloaded in their own columns, so they cannot be used as a
-  reference until they are converted too.
+- Only IEDB's `bcr` table comes in AIRR so far (IEDB publishes it that
+  way); CoV-AbDab and ASD are still downloaded in their own columns, so they
+  cannot be used as a reference until they are converted.
 - Antibodies only: TCR tables are not supported yet (no `IGH` rows, so they
   are refused).
 - No substitution-matrix (BLOSUM) scoring.

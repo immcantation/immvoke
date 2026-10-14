@@ -4,8 +4,9 @@
 Sugar for `immvoke specificity iedb download bcr`: BCR is currently the
 only table this project annotates against, so this drops both the source
 name and the `download` verb -- naming the table is enough. Calling it
-fetches IEDB's receptor bulk export and converts it to AIRR in the same
-step; there is no separate command for "just download" or "just convert."
+fetches IEDB's AIRR export and writes its BCR table as an AIRR rearrangement
+TSV that keeps every column IEDB provides -- the epitope and assay context
+included -- with every field the AIRR schema requires present.
 """
 
 # Info
@@ -32,20 +33,20 @@ def addBcrParser(dbs):
         `immvoke.Cli._addSpecificityGroupParser`.
     """
     parser = dbs.add_parser(
-        'bcr', help='fetch + convert IEDB BCR receptor sequences to AIRR',
-        description='Download IEDB\'s BCR (antibody) receptor table and '
-                    'convert it to AIRR in one step -- shorthand for '
-                    '`immvoke specificity iedb download bcr`.',
+        'bcr', help='fetch IEDB BCR receptor sequences as AIRR',
+        description='Download IEDB\'s BCR (antibody) receptor table as an '
+                    'AIRR rearrangement TSV, keeping IEDB\'s own columns '
+                    '(epitope, assay, ...) alongside every AIRR required '
+                    'field -- shorthand for `immvoke specificity iedb '
+                    'download bcr`.',
         formatter_class=CommonHelpFormatter)
     parser.add_argument('--outdir', type=Path, default=DEFAULT_OUTDIR,
                         help='directory to write into')
-    parser.add_argument('--strict-airr', action='store_true',
-                        help='drop columns the AIRR schema does not define')
 
 
 def handleBcr(args):
     """
-    Fetch and convert IEDB's `bcr` table.
+    Fetch IEDB's `bcr` table and write it as AIRR, keeping every column.
 
     Delegates to `immvoke.Cli.handleSpecificityDownload` rather than
     duplicating it -- imported locally to avoid a circular import, since
@@ -61,4 +62,4 @@ def handleBcr(args):
 
     return handleSpecificityDownload(Namespace(
         db='iedb', table='bcr', outdir=args.outdir, limit=None,
-        dry_run=False, no_resume=False, strict_airr=args.strict_airr))
+        dry_run=False, no_resume=False, strict_airr=False))
