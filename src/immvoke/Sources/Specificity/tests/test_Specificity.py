@@ -318,10 +318,11 @@ class TestIedbAirrExport(unittest.TestCase):
         return iedbAirrRows(
             {'cell_id': '1284_2134780p', 'sequence_id': '1284_1', 'locus': 'IGH',
              'productive': 'T', 'v_call': 'IGHV5-9*01, IGHV5-9*03',
-             'cdr3_aa': 'TRLGDYGYAYTMDY', 'iedb_epitope_name': 'G58, L59',
+             'j_call': 'IGHJ4*02', 'cdr3_aa': 'TRLGDYGYAYTMDY', 'iedb_epitope_name': 'G58, L59',
              'iedb_assay_outcome': 'positive'},
             {'cell_id': '1284_2134780p', 'sequence_id': '1284_2', 'locus': 'IGK',
-             'productive': 'T', 'v_call': 'IGKV3-2*01', 'cdr3_aa': 'QQSKEVPLT',
+             'productive': 'T', 'v_call': 'IGKV3-2*01', 'j_call': 'IGKJ2*01',
+             'cdr3_aa': 'QQSKEVPLT',
              'iedb_epitope_name': 'G58, L59', 'iedb_assay_outcome': 'positive'})
 
     def test_records_pass_through_with_provenance(self):

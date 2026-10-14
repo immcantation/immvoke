@@ -21,96 +21,16 @@ from immvoke.Convert import writeAirr
 from immvoke.Exceptions import AnnotationError
 from immvoke.Sources.Specificity.Annotate import (
     annotateSpecificity,
-    runFuzzyAnnotation,
-    runLevenshteinAnnotation,
     runPairedExactAnnotation,
 )
 from immvoke.Sources.Specificity.AnnotateCli import handleAnnotate
+from immvoke.Sources.Specificity.tests.BruteForce import bruteForceAnnotation
 
 ANNOTATE = 'immvoke.Sources.Specificity.Annotate'
 
 
 def frame(rows):
     return pandas.DataFrame(rows)
-
-
-class TestRunFuzzyAnnotation(unittest.TestCase):
-    """
-    Tests for substitution-tolerant (Hamming) annotation
-    """
-
-    def test_within_budget_hits(self):
-        queries = frame([{'cdr3': 'CARDYW'}])
-        reference = frame([{'id': 'r1', 'cdr3': 'CARQYW'}])  # 1 substitution
-
-        result = runFuzzyAnnotation(queries, reference, ['cdr3'], max_mismatches=1,
-                                    id_col='id')
-
-        self.assertEqual(result['hit_ids'].tolist(), ['r1'])
-        self.assertEqual(result['min_mismatches'].tolist(), [1.0])
-
-    def test_over_budget_does_not_hit(self):
-        queries = frame([{'cdr3': 'CARDYW'}])
-        reference = frame([{'id': 'r1', 'cdr3': 'CQRQYW'}])  # 2 substitutions
-
-        result = runFuzzyAnnotation(queries, reference, ['cdr3'], max_mismatches=1,
-                                    id_col='id')
-
-        self.assertEqual(result['n_hits_total'].tolist(), [0])
-        self.assertTrue(pandas.isna(result['min_mismatches'].iloc[0]))
-
-    def test_exact_cols_gate_candidates_before_fuzzy_comparison(self):
-        queries = frame([{'cdr3': 'CARDYW', 'v_call': 'IGHV1-2'}])
-        reference = frame([
-            {'id': 'r1', 'cdr3': 'CARQYW', 'v_call': 'IGHV3-9'},  # wrong V-gene
-        ])
-
-        result = runFuzzyAnnotation(queries, reference, ['cdr3'], max_mismatches=1,
-                                    id_col='id', exact_cols=['v_call'])
-
-        self.assertEqual(result['n_hits_total'].tolist(), [0])
-
-    def test_threshold_is_fraction_scales_with_query_length(self):
-        # length 10, 15% -> floor(1.5) == 1 substitution allowed
-        queries = frame([{'cdr3': 'AAAAAAAAAA'}])
-        reference = frame([{'id': 'close', 'cdr3': 'AAAAAAAAAB'},
-                           {'id': 'far', 'cdr3': 'AABBAAAAAB'}])
-
-        result = runFuzzyAnnotation(queries, reference, ['cdr3'], max_mismatches=0.15,
-                                    id_col='id', threshold_is_fraction=True)
-
-        self.assertEqual(result['hit_ids'].tolist(), ['close'])
-
-    def test_mismatch_positions_single_column_are_bare(self):
-        queries = frame([{'cdr3': 'AAAA'}])
-        reference = frame([{'id': 'r1', 'cdr3': 'ABAB'}])
-
-        result = runFuzzyAnnotation(queries, reference, ['cdr3'], max_mismatches=2,
-                                    id_col='id')
-
-        self.assertEqual(result['mismatch_positions'].tolist(), ['1,3'])
-
-    def test_mismatch_positions_multi_column_are_column_prefixed(self):
-        queries = frame([{'a': 'AA', 'b': 'AA'}])
-        reference = frame([{'id': 'r1', 'a': 'AB', 'b': 'BA'}])
-
-        result = runFuzzyAnnotation(queries, reference, ['a', 'b'], max_mismatches=2,
-                                    id_col='id')
-
-        self.assertEqual(result['mismatch_positions'].tolist(), ['0:1,1:0'])
-
-    def test_best_hit_per_id_is_kept_when_several_reference_rows_share_it(self):
-        queries = frame([{'cdr3': 'AAAA'}])
-        reference = frame([
-            {'id': 'r1', 'cdr3': 'AAAB'},  # distance 1
-            {'id': 'r1', 'cdr3': 'ABBB'},  # distance 3, same id, worse
-        ])
-
-        result = runFuzzyAnnotation(queries, reference, ['cdr3'], max_mismatches=3,
-                                    id_col='id')
-
-        self.assertEqual(result['n_hits_total'].tolist(), [1])
-        self.assertEqual(result['min_mismatches'].tolist(), [1.0])
 
 
 class TestRunPairedExactAnnotation(unittest.TestCase):
@@ -190,99 +110,6 @@ class TestRunPairedExactAnnotation(unittest.TestCase):
         self.assertEqual(row5['light_hit_ids'], 'refB')
         self.assertEqual(row5['both_hit_ids'], '')
 
-    def test_python_backend_gives_the_same_result(self):
-        queries, reference = self._antibodies()
-
-        expected = runPairedExactAnnotation(queries, reference)
-        with mock.patch('immvoke.Sources.Specificity.Symscan.runSymscanAnnotation',
-                        side_effect=AssertionError):
-            result = runPairedExactAnnotation(queries, reference, backend='python')
-
-        pandas.testing.assert_frame_equal(result, expected)
-
-    def test_unknown_backend_raises(self):
-        queries, reference = self._antibodies()
-
-        with self.assertRaises(AnnotationError):
-            runPairedExactAnnotation(queries, reference, backend='blast')
-
-
-class TestRunLevenshteinAnnotation(unittest.TestCase):
-    """
-    Tests for indel-tolerant (Levenshtein) annotation
-    """
-
-    def test_a_substitution_within_budget_hits(self):
-        queries = frame([{'cdr3': 'CARDYW'}])
-        reference = frame([{'id': 'r1', 'cdr3': 'CARQYW'}])  # 1 substitution
-
-        result = runLevenshteinAnnotation(queries, reference, 'cdr3', max_edits=1,
-                                          id_col='id')
-
-        self.assertEqual(result['hit_ids'].tolist(), ['r1'])
-        self.assertEqual(result['min_mismatches'].tolist(), [1.0])
-
-    def test_an_insertion_within_budget_hits(self):
-        """Unlike Hamming, Levenshtein tolerates a length difference."""
-        queries = frame([{'cdr3': 'CARDYW'}])
-        reference = frame([{'id': 'r1', 'cdr3': 'CARDXYW'}])  # 1 insertion
-
-        result = runLevenshteinAnnotation(queries, reference, 'cdr3', max_edits=1,
-                                          id_col='id')
-
-        self.assertEqual(result['hit_ids'].tolist(), ['r1'])
-        self.assertEqual(result['min_mismatches'].tolist(), [1.0])
-
-    def test_over_budget_does_not_hit(self):
-        queries = frame([{'cdr3': 'CARDYW'}])
-        reference = frame([{'id': 'r1', 'cdr3': 'CQRQYW'}])  # 2 substitutions
-
-        result = runLevenshteinAnnotation(queries, reference, 'cdr3', max_edits=1,
-                                          id_col='id')
-
-        self.assertEqual(result['n_hits_total'].tolist(), [0])
-        self.assertTrue(pandas.isna(result['min_mismatches'].iloc[0]))
-
-    def test_exact_cols_gate_candidates_first(self):
-        queries = frame([{'cdr3': 'CARDYW', 'v_call': 'IGHV1-2'}])
-        reference = frame([
-            {'id': 'r1', 'cdr3': 'CARQYW', 'v_call': 'IGHV3-9'},  # wrong V-gene
-        ])
-
-        result = runLevenshteinAnnotation(queries, reference, 'cdr3', max_edits=1,
-                                          id_col='id', exact_cols=['v_call'])
-
-        self.assertEqual(result['n_hits_total'].tolist(), [0])
-
-    def test_best_hit_per_id_is_kept(self):
-        queries = frame([{'cdr3': 'AAAA'}])
-        reference = frame([
-            {'id': 'r1', 'cdr3': 'AAAB'},   # distance 1
-            {'id': 'r1', 'cdr3': 'AABBB'},  # distance 3, same id, worse
-        ])
-
-        result = runLevenshteinAnnotation(queries, reference, 'cdr3', max_edits=3,
-                                          id_col='id')
-
-        self.assertEqual(result['n_hits_total'].tolist(), [1])
-        self.assertEqual(result['min_mismatches'].tolist(), [1.0])
-
-    def test_threshold_is_fraction_scales_with_query_length(self):
-        """0.2 of length 6 -> floor(1.2) == 1 edit; of length 10 -> 2."""
-        queries = frame([{'cdr3': 'CARDYW'}, {'cdr3': 'AAAAAAAAAA'}])
-        reference = frame([
-            {'id': 'r1', 'cdr3': 'CARDXXYW'},    # 2 insertions from row 0
-            {'id': 'r2', 'cdr3': 'AAAAAAAABBA'},  # 1 sub + 1 insertion from row 1
-        ])
-
-        result = runLevenshteinAnnotation(queries, reference, 'cdr3', max_edits=0.2,
-                                          id_col='id', threshold_is_fraction=True)
-
-        self.assertEqual(result['hit_ids'].tolist(), ['', 'r2'])
-
-
-
-
 def airr(rows):
     """
     An AIRR rearrangement table: `rows`, plus every field the AIRR schema
@@ -296,6 +123,43 @@ def airr(rows):
     return table
 
 
+#: sequence_region -> the columns it compares, as annotateSpecificity does.
+REGION_COLUMNS = {'CDR3': ['cdr3_aa'], 'VDJ': ['sequence_aa'],
+                  'CDRs': ['cdr1_aa', 'cdr2_aa', 'cdr3_aa']}
+
+
+def bruteForceSpecificity(queries, reference, sequence_region='CDR3',
+                          partition_by=None, identity_threshold=None,
+                          distance_metric='hamming', gene_match='gene'):
+    """
+    annotateSpecificity's single-chain result table, by brute force: the
+    same heavy chain filter, columns, gates and threshold, every pair
+    compared directly (see BruteForce.py).
+    """
+    def heavyChains(rows):
+        table = pandas.DataFrame(rows)
+        if 'locus' in table.columns:
+            table = table[table['locus'] == 'IGH']
+        return table.reset_index(drop=True)
+
+    queries, reference = heavyChains(queries), heavyChains(reference)
+    gene_cols = {'V': ['v_call'], 'VJ': ['v_call', 'j_call'],
+                 'VJL': ['v_call', 'j_call']}.get(partition_by)
+    exact_cols = None
+    if partition_by == 'VJL':
+        queries = queries.assign(cdr3_length=queries['cdr3_aa'].str.len())
+        reference = reference.assign(cdr3_length=reference['cdr3_aa'].str.len())
+        exact_cols = ['cdr3_length']
+    exact = identity_threshold is None or identity_threshold >= 1.0
+
+    return bruteForceAnnotation(
+        queries, reference, REGION_COLUMNS[sequence_region],
+        0 if exact else 1 - identity_threshold,
+        distance_type='hamming' if exact else distance_metric, id_col='sequence_id',
+        exact_cols=exact_cols, threshold_is_fraction=not exact, gene_cols=gene_cols,
+        gene_match=gene_match)
+
+
 def heavy(sequence_id, cdr3_aa, v_call='IGHV1', j_call='IGHJ1', **extra):
     return dict(sequence_id=sequence_id, locus='IGH', cdr3_aa=cdr3_aa,
                 v_call=v_call, j_call=j_call, **extra)
@@ -305,7 +169,7 @@ class TestAnnotateSpecificity(unittest.TestCase):
     """
     Tests for the high level entry point, step by step through its flow:
     paired?, heavy chain, sequence_region, partition_by,
-    identity_threshold/distance_metric, backend, output
+    identity_threshold/distance_metric, symscan, output
     """
 
     def _hits(self, queries, reference, **kwargs):
@@ -389,53 +253,48 @@ class TestAnnotateSpecificity(unittest.TestCase):
                                     distance_metric='levenshtein'), ['ref1'])
         self.assertEqual(self._hits(queries, reference, identity_threshold=0.9), [''])
 
-    def test_backends_give_the_same_result(self):
+    def test_matches_brute_force(self):
         queries = [heavy('q%d' % i, cdr3, cdr1_aa='GFT', cdr2_aa='ISY')
                    for i, cdr3 in enumerate(['CARDYW', 'CARXYW', 'CARDDYW', 'CQ'])]
         reference = [heavy('r%d' % i, cdr3, cdr1_aa='GFT', cdr2_aa='ISS')
-                     for i, cdr3 in enumerate(['CARDYW', 'CARQYW', 'CARDYW', 'CQ'])]
+                     for i, cdr3 in enumerate(['CARDYW', 'CARQYW', 'CXRDYW', 'CQ'])]
         modes = [{}, {'identity_threshold': 0.8},
                  {'identity_threshold': 0.8, 'distance_metric': 'levenshtein'},
                  {'sequence_region': 'CDRs', 'identity_threshold': 0.9},
                  {'partition_by': 'VJL', 'identity_threshold': 0.8}]
         for mode in modes:
             with self.subTest(**mode):
-                symscan = annotateSpecificity(frame(queries), airr(reference),
-                                              backend='symscan', **mode)
-                python = annotateSpecificity(frame(queries), airr(reference),
-                                             backend='python', **mode)
-                pandas.testing.assert_frame_equal(symscan, python)
+                result = annotateSpecificity(frame(queries), airr(reference), **mode)
+                pandas.testing.assert_frame_equal(
+                    result, bruteForceSpecificity(queries, reference, **mode),
+                    check_dtype=False)
 
-    def test_default_backend_is_symscan(self):
-        with mock.patch(ANNOTATE + '.runFuzzyAnnotation', side_effect=AssertionError), \
-             mock.patch(ANNOTATE + '.runLevenshteinAnnotation',
-                        side_effect=AssertionError):
-            for metric in ('hamming', 'levenshtein'):
-                self.assertEqual(self._hits([heavy('q1', 'CARDYWAAAA')],
-                                            [heavy('ref1', 'CARQYWAAAA')],
-                                            identity_threshold=0.9,
-                                            distance_metric=metric), ['ref1'])
+    def test_x_matches_any_residue(self):
+        self.assertEqual(self._hits([heavy('q1', 'CARXYW'), heavy('q2', 'CAKDYW')],
+                                    [heavy('ref1', 'CARDYW')]), ['ref1', ''])
 
-    def test_a_distance_beyond_symscan_runs_in_python(self):
-        """20 residues at 0.25 identity -> 15 differences, above symscan's 14."""
-        with mock.patch('symscan.get_neighbors_across', side_effect=AssertionError):
-            self.assertEqual(self._hits([heavy('q1', 'A' * 20)],
-                                        [heavy('ref1', 'B' * 15 + 'A' * 5)],
-                                        identity_threshold=0.25), ['ref1'])
+    def test_a_threshold_beyond_symscan_is_skipped_with_a_warning(self):
+        """20 residues at 0.25 identity -> 15 differences, above symscan's 14:
+        symscan is never called with it, and the row is reported."""
+        with mock.patch('symscan.get_neighbors_across',
+                        side_effect=AssertionError), \
+             self.assertLogs('immvoke.Sources.Specificity.Symscan', 'WARNING'):
+            hits = self._hits([heavy('q1', 'A' * 20)],
+                              [heavy('ref1', 'B' * 15 + 'A' * 5)],
+                              identity_threshold=0.25)
 
-    def test_paired_classifies_each_antibody_on_either_backend(self):
+        self.assertEqual(hits, [''])
+
+    def test_paired_classifies_each_antibody(self):
         rows = [dict(cell_id='ab1', locus='IGH', cdr3_aa='CARDYW', v_call='IGHV1',
                      j_call='IGHJ1'),
                 dict(cell_id='ab1', locus='IGK', cdr3_aa='CQQYNS', v_call='IGKV1',
                      j_call='IGKJ1')]
         reference = [dict(row, cell_id='refA') for row in rows]
 
-        for backend in ('symscan', 'python'):
-            with self.subTest(backend=backend):
-                result = annotateSpecificity(frame(rows), airr(reference),
-                                             paired=True, backend=backend)
-                self.assertEqual(result['classification'].tolist(), ['both'])
-                self.assertEqual(result['both_hit_ids'].tolist(), ['refA'])
+        result = annotateSpecificity(frame(rows), airr(reference), paired=True)
+        self.assertEqual(result['classification'].tolist(), ['both'])
+        self.assertEqual(result['both_hit_ids'].tolist(), ['refA'])
 
         with self.assertLogs(ANNOTATE, 'WARNING'):
             annotateSpecificity(frame(rows), airr(reference), paired=True,
@@ -467,18 +326,18 @@ class TestAnnotateSpecificity(unittest.TestCase):
             heavy('otherFamily', 'CARDYW', v_call='IGHV3-23*01', j_call='IGHJ4*02'),
         ]
         expected = {
-            # geneOnly: its allele is unknown, so it agrees with any
-            'allele': {'sameAllele', 'geneOnly'},
-            'gene': {'sameAllele', 'otherAllele', 'geneOnly', 'several', 'blankJ'},
-            'family': {'sameAllele', 'otherAllele', 'geneOnly', 'several', 'blankJ',
+            # geneOnly carries no allele: a gene level match only
+            'allele': {'sameAllele'},
+            # blankJ: a blank call agrees with nothing, at any level
+            'gene': {'sameAllele', 'otherAllele', 'geneOnly', 'several'},
+            'family': {'sameAllele', 'otherAllele', 'geneOnly', 'several',
                        'sameFamily'},
         }
-        for backend in ('symscan', 'python'):
-            for level, ids in expected.items():
-                with self.subTest(backend=backend, gene_match=level):
-                    hits = self._hits(queries, reference, partition_by='VJ',
-                                      gene_match=level, backend=backend)
-                    self.assertEqual(set(hits[0].split(';')), ids)
+        for level, ids in expected.items():
+            with self.subTest(gene_match=level):
+                hits = self._hits(queries, reference, partition_by='VJ',
+                                  gene_match=level)
+                self.assertEqual(set(hits[0].split(';')), ids)
 
     def test_gene_match_default_is_gene(self):
         hits = self._hits([heavy('q1', 'CARDYW', v_call='IGHV1-2*02')],
@@ -486,7 +345,7 @@ class TestAnnotateSpecificity(unittest.TestCase):
                           partition_by='V')
         self.assertEqual(hits, ['ref1'])
 
-    def test_backends_agree_on_messy_gene_calls(self):
+    def test_messy_gene_calls_match_brute_force(self):
         calls = ['IGHV1-2*02', 'IGHV1-2*04', 'IGHV1-2', '', 'IGVL3-10',
                  'IGHV3-23*01, IGHV1-2*02', 'IGHV1-69*01']
         queries = [heavy('q%d' % i, cdr3, v_call=calls[i % len(calls)],
@@ -500,35 +359,51 @@ class TestAnnotateSpecificity(unittest.TestCase):
                          {'identity_threshold': 0.8, 'distance_metric': 'levenshtein'}):
                 with self.subTest(gene_match=level, **mode):
                     kwargs = dict(partition_by='VJ', gene_match=level, **mode)
-                    symscan = annotateSpecificity(frame(queries), airr(reference),
-                                                  backend='symscan', **kwargs)
-                    python = annotateSpecificity(frame(queries), airr(reference),
-                                                 backend='python', **kwargs)
-                    pandas.testing.assert_frame_equal(symscan, python)
+                    result = annotateSpecificity(frame(queries), airr(reference),
+                                                 **kwargs)
+                    pandas.testing.assert_frame_equal(
+                        result, bruteForceSpecificity(queries, reference, **kwargs),
+                        check_dtype=False)
 
     def test_paired_compares_genes_at_gene_match_level(self):
         rows = [dict(cell_id='ab1', locus='IGH', cdr3_aa='CARDYW', v_call='IGHV1-2*02',
                      j_call='IGHJ4*02'),
                 dict(cell_id='ab1', locus='IGK', cdr3_aa='CQQYNS', v_call='IGKV1-39*01',
-                     j_call='')]
+                     j_call='IGKJ1*01')]
         reference = [dict(rows[0], cell_id='refA', v_call='IGHV1-2*04'),
-                     dict(rows[1], cell_id='refA', j_call='IGKJ1*01')]
+                     dict(rows[1], cell_id='refA')]
 
-        for backend in ('symscan', 'python'):
-            for level, classification in (('gene', 'both'), ('allele', 'light_only')):
-                with self.subTest(backend=backend, gene_match=level):
-                    result = annotateSpecificity(frame(rows), airr(reference),
-                                                 paired=True, gene_match=level,
-                                                 backend=backend)
-                    self.assertEqual(result['classification'].tolist(),
-                                     [classification])
+        for level, classification in (('gene', 'both'), ('allele', 'light_only')):
+            with self.subTest(gene_match=level):
+                result = annotateSpecificity(frame(rows), airr(reference),
+                                             paired=True, gene_match=level)
+                self.assertEqual(result['classification'].tolist(), [classification])
+
+        # A blank J-gene call agrees with nothing, so the light chain cannot match.
+        blank_j = [rows[0], dict(rows[1], j_call='')]
+        result = annotateSpecificity(frame(blank_j), airr(reference), paired=True)
+        self.assertEqual(result['classification'].tolist(), ['heavy_only'])
+
+    def test_a_blank_locus_is_filled_from_the_gene_calls(self):
+        """A light chain IEDB left untyped still pairs; a heavy chain with no
+        locus is still compared."""
+        rows = [dict(sequence_id='h1', cell_id='ab1', locus='IGH', cdr3_aa='CARDYW',
+                     v_call='IGHV1-2*02', j_call='IGHJ4*02'),
+                dict(sequence_id='k1', cell_id='ab1', locus='', cdr3_aa='CQQYNS',
+                     v_call='IGKV1-39*01', j_call='IGKJ1*01')]
+        reference = [dict(row, cell_id='refA') for row in rows]
+
+        paired = annotateSpecificity(frame(rows), airr(reference), paired=True)
+        self.assertEqual(paired['classification'].tolist(), ['both'])
+
+        hits = self._hits([dict(heavy('q1', 'CARDYW'), locus='')],
+                          [dict(heavy('ref1', 'CARDYW'), locus='')])
+        self.assertEqual(hits, ['ref1'])
 
     def test_invalid_arguments_raise(self):
         queries = [heavy('q1', 'CARDYW', cdr1_aa='GFT', cdr2_aa='ISY')]
         cases = [{'sequence_region': 'CDR4'}, {'partition_by': 'J'},
-                 {'distance_metric': 'blosum'}, {'backend': 'compairr'},
-                 {'backend': 'auto'},
-                 {'gene_match': 'segment'},
+                 {'distance_metric': 'blosum'}, {'gene_match': 'segment'},
                  {'identity_threshold': 0}, {'identity_threshold': 1.5},
                  {'sequence_region': 'CDRs', 'identity_threshold': 0.9,
                   'distance_metric': 'levenshtein'},
@@ -581,8 +456,8 @@ class TestReferenceContract(unittest.TestCase):
         References shaped like different databases: IEDB (allele calls, blank
         J-genes, provenance columns), a user's own IgBLAST/Change-O table
         (several calls in one cell, extra AIRR fields), and the bare minimum.
-        Every query row is in its reference, so must find itself, on either
-        backend alike.
+        Every query row is in its reference, so must find itself, and the
+        whole table must match brute force.
         """
         cdr3s = ['CARDYW', 'CARQYW', 'CAKDGYSSGWYFDYW', 'CTTDLW']
         references = {
@@ -604,13 +479,17 @@ class TestReferenceContract(unittest.TestCase):
             gated = [{'partition_by': 'VJ'}] if 'v_call' in rows[0] else []
             for mode in modes + gated:
                 with self.subTest(reference=name, **mode):
-                    symscan = annotateSpecificity(queries, reference, **mode)
-                    python = annotateSpecificity(queries, reference, backend='python',
-                                                 **mode)
-                    pandas.testing.assert_frame_equal(symscan, python)
-                    ids = queries['sequence_id'].tolist()
-                    for own, hits in zip(ids, symscan['hit_ids']):
-                        self.assertIn(own, hits.split(';'))
+                    result = annotateSpecificity(queries, reference, **mode)
+                    pandas.testing.assert_frame_equal(
+                        result, bruteForceSpecificity(rows, rows, **mode),
+                        check_dtype=False)
+                    for row, hits in zip(rows, result['hit_ids']):
+                        # Under a partition, a blank J-gene call agrees with
+                        # nothing -- not even the row's own.
+                        if mode.get('partition_by') and not row['j_call']:
+                            self.assertNotIn(row['sequence_id'], hits.split(';'))
+                        else:
+                            self.assertIn(row['sequence_id'], hits.split(';'))
 
     def test_no_heavy_chain_rows_left_raises(self):
         light = dict(sequence_id='k1', locus='IGK', cdr3_aa='CQQYNS',
@@ -640,22 +519,21 @@ class TestAnnotateCli(unittest.TestCase):
         text = out.getvalue()
         for flag in ('--query', '--reference', '--sequence-region', '--partition-by',
                      '--paired', '--identity-threshold', '--distance-metric',
-                     '--gene-match',
-                     '--backend', '--threads', '--out'):
+                     '--gene-match', '--threads', '--out'):
             self.assertIn(flag, text)
-        self.assertNotIn('compairr', text.lower())
+        for gone in ('--backend', 'compairr', 'python'):
+            self.assertNotIn(gone, text.lower())
 
     def test_defaults(self):
         args = getArgParser().parse_args(self.BASE)
 
         self.assertEqual((args.sequence_region, args.partition_by, args.paired,
                           args.identity_threshold, args.distance_metric,
-                          args.gene_match, args.backend),
-                         ('CDR3', None, False, None, 'hamming', 'gene', 'symscan'))
+                          args.gene_match),
+                         ('CDR3', None, False, None, 'hamming', 'gene'))
 
     def test_invalid_choices_are_rejected(self):
-        for extra in (['--backend', 'compairr'], ['--backend', 'auto'],
-                      ['--partition-by', 'J'],
+        for extra in (['--backend', 'symscan'], ['--partition-by', 'J'],
                       ['--sequence-region', 'CDR4'], ['--distance-metric', 'x'],
                       ['--gene-match', 'segment']):
             with self.subTest(extra=extra), \
@@ -672,7 +550,7 @@ class TestAnnotateCli(unittest.TestCase):
         args = getArgParser().parse_args(self.BASE + [
             '--sequence-region', 'CDRs', '--partition-by', 'VJL',
             '--identity-threshold', '0.9', '--gene-match', 'allele',
-            '--backend', 'python', '--threads', '4'])
+            '--threads', '4'])
 
         with mock.patch('immvoke.Sources.Specificity.AnnotateCli.annotateSpecificity') \
                 as annotate:
@@ -682,8 +560,7 @@ class TestAnnotateCli(unittest.TestCase):
             query=Path('q.tsv'), reference=Path('r.tsv'), sequence_region='CDRs',
             partition_by='VJL', paired=False, identity_threshold=0.9,
             distance_metric='hamming', gene_match='allele', threads=4,
-            output=Path('o.tsv'),
-            backend='python')
+            output=Path('o.tsv'))
 
     def test_end_to_end(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -25,7 +25,7 @@ from pathlib import Path
 
 # Immvoke imports
 from immvoke.Commandline import CommonHelpFormatter
-from immvoke.Sources.Specificity.Annotate import BACKENDS, annotateSpecificity
+from immvoke.Sources.Specificity.Annotate import annotateSpecificity
 from immvoke.Sources.Specificity.Genes import GENE_MATCH_LEVELS
 
 
@@ -71,8 +71,7 @@ def addAnnotateParser(commands):
                              'j_call: allele (same gene and allele), gene '
                              '(same gene, any allele) or family. A cell with '
                              'several calls agrees if any one does; a blank '
-                             'or unrecognized call is unknown and agrees '
-                             'with any gene')
+                             'or unrecognized call agrees with none')
     parser.add_argument('--paired', action='store_true',
                         help='require V-gene and J-gene agreement (see '
                              '--gene-match) and exact CDR3 agreement on both '
@@ -88,27 +87,22 @@ def addAnnotateParser(commands):
                         type=float, default=None, metavar='FRACTION',
                         help='minimum sequence identity in (0.0, 1.0], e.g. '
                              '0.9 allows up to 10%% of the query\'s positions '
-                             'to differ; unset, an exact match is required')
+                             'to differ; unset, an exact match is required. '
+                             'Under hamming (and an exact match) an X '
+                             'residue matches any residue. Rows a threshold '
+                             'makes too large for symscan (over 14 '
+                             'differences, or a very long sequence) are '
+                             'skipped with a warning')
     parser.add_argument('--distance-metric', dest='distance_metric',
                         choices=['hamming', 'levenshtein'], default='hamming',
                         help='hamming (substitutions only) or levenshtein '
                              '(substitutions, insertions and deletions -- '
                              'not with --sequence-region CDRs). Only matters '
                              'when --identity-threshold is below 1.0')
-    parser.add_argument('--backend', choices=BACKENDS, default='symscan',
-                        help='matching engine. symscan is a required '
-                             'dependency and runs every mode; python runs '
-                             'only when chosen here, never as a fallback, '
-                             'and gives the same result. Rows symscan cannot '
-                             'index (an '
-                             '\'X\' wildcard, a distance above 14, or very '
-                             'long sequences at a high tolerance) are '
-                             'compared in Python automatically')
     parser.add_argument('--threads', type=int, default=1,
                         help='threads for symscan\'s thread pool (-1 for '
                              'every core; only the first symscan run in a '
-                             'process sets it); the python backend is '
-                             'single threaded')
+                             'process sets it)')
     parser.add_argument('-o', '--out', type=Path, required=True,
                         help='write the annotation table here')
 
@@ -130,6 +124,6 @@ def handleAnnotate(args):
         paired=args.paired, identity_threshold=args.identity_threshold,
         distance_metric=args.distance_metric, gene_match=args.gene_match,
         threads=args.threads,
-        output=args.out, backend=args.backend)
+        output=args.out)
 
     return 0

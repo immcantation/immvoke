@@ -43,7 +43,6 @@ the same options, as file paths or DataFrames, and returns the result table.
 | `--identity-threshold` | `identity_threshold` | unset (exact), or a fraction in (0, 1] | e.g. `0.9` allows up to 10% of the query's positions to differ |
 | `--distance-metric` | `distance_metric` | `hamming` (default), `levenshtein` | substitutions only, or substitutions, insertions and deletions |
 | `--paired` | `paired` | flag | match heavy and light chain of the same reference antibody |
-| `--backend` | `backend` | `symscan` (default), `python` | matching engine; both give the same result |
 | `--threads` | `threads` | `1` (default); `-1` for every core | symscan's threads |
 | `-o`, `--out` | `output` | path | where to write the result TSV |
 

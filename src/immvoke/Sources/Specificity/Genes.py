@@ -13,8 +13,9 @@ caller chooses:
     family  same family               (IGHV1-2*02 == IGHV1-69*01)
 
 Two cells agree when any name in one agrees with any name in the other. A
-blank cell, or one naming no recognizable gene, is unknown and agrees with
-anything; so does a gene level name under 'allele', whose allele is unknown.
+blank cell, or one naming no recognizable gene, has nothing to compare and
+agrees with nothing -- not even another blank. A gene level name (`IGHV1-2`) carries no allele, so under 'allele'
+it agrees with nothing -- it is a gene level match, not an allele level one.
 
 The gene and family patterns are Change-O's (changeo/Gene.py, Immcantation),
 so a name parses here the way Change-O's getGene/getFamily would parse it.
@@ -67,9 +68,10 @@ def parseCall(call, level='gene'):
 
     Returns:
       dict: name (the gene, or the family under 'family') to the set of its
-      alleles -- None standing for "any allele" at 'gene'/'family' level, or
-      for a gene level name at 'allele' level. Empty when the cell is blank
-      or names no recognizable gene, i.e. unknown.
+      alleles -- None standing for "any allele" at 'gene'/'family' level; at
+      'allele' level a gene level name keeps its key with no allele, so it
+      can never agree. Empty when the cell is blank or names no recognizable
+      gene.
 
     Raises:
       AnnotationError: if `level` is not recognized.
@@ -80,11 +82,43 @@ def parseCall(call, level='gene'):
         name, allele = match.group('gene'), match.group('allele')
         if level == 'family':
             name = _FAMILY_REGEX.match(name).group(0)
+        alleles = names.setdefault(name, set())
         if level != 'allele':
-            allele = None
-        names.setdefault(name, set()).add(allele)
+            alleles.add(None)
+        elif allele is not None:
+            alleles.add(allele)
 
     return names
+
+
+def _loci(call):
+    """
+    Returns:
+      set: the loci (IGH, IGK, ...) the gene names in one call cell belong to.
+    """
+    return {match.group(2) for match in _CALL_REGEX.finditer(call or '')}
+
+
+def inferLocus(v_call, j_call):
+    """
+    The locus a chain's gene calls name, for a chain whose locus is blank.
+
+    Arguments:
+      v_call (str): the V-gene call cell.
+      j_call (str): the J-gene call cell.
+
+    Returns:
+      str: the one locus the V call names (IGKV1-39 -> IGK), or, without a
+      V call, the one the J call names; '' when the calls name none, more
+      than one, or V and J disagree -- nothing is guessed.
+    """
+    v_loci, j_loci = _loci(v_call), _loci(j_call)
+    if len(v_loci) == 1 and (not j_loci or j_loci == v_loci):
+        return v_loci.pop()
+    if not v_loci and len(j_loci) == 1:
+        return j_loci.pop()
+
+    return ''
 
 
 def callsAgree(a, b):
@@ -96,11 +130,12 @@ def callsAgree(a, b):
       b (dict): the other, parsed at the same level.
 
     Returns:
-      bool: True if either is unknown (empty), or they share a name whose
-      alleles are equal, or unknown on either side.
+      bool: True if they share a name with an allele in common -- any
+      allele (None) at 'gene'/'family' level. A blank or unrecognized call
+      (empty) agrees with nothing.
     """
     if not a or not b:
-        return True
+        return False
 
     for name in a.keys() & b.keys():
         alleles_a, alleles_b = a[name], b[name]
@@ -146,8 +181,8 @@ class GeneGate:
         parsed = {value: parseCall(value, level) for value in set(values)}
         unparsed = sum(1 for value in values if value.strip() and not parsed[value])
         if unparsed:
-            log.warning("%d %s %s values name no recognizable gene; treating them "
-                        'as unknown, which agrees with any gene', unparsed, label, col)
+            log.warning("%d %s %s values name no recognizable gene; those rows "
+                        'agree with no gene', unparsed, label, col)
 
         return [parsed[value] for value in values]
 

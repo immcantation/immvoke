@@ -32,12 +32,11 @@ graph TD
     Thresh -->|1.0| Exact[Exact match]:::process
     Thresh -->|< 1.0| Dist[Hamming or Levenshtein <br>within allowed mismatches]:::process
 
-    Exact --> Symscan[symscan]:::process
+    Exact --> Symscan[symscan <br>X matches any residue]:::process
     Dist --> Symscan
-    Symscan -->|X wildcard, distance > 14 <br>or index too large| Rows[Those rows compared <br>in Python]:::process
+    Symscan -->|distance > 14 <br>or sequence too long| Skip[Skip those rows <br>with a warning]:::process
 
     Symscan --> Out[Per-query result: n_hits_total, hit_ids, ... <br>every query row, 0 hits if unmatched]:::process
-    Rows --> Out
 
     PairedOut --> File[Output Specificity File <br>TSV + returned DataFrame]:::output
     Out --> File
@@ -61,12 +60,23 @@ needs the fields the chosen options read. A table without a `locus` column
 is compared whole; a table with one but no `IGH` row left is an error, never
 an empty result.
 
+A blank `locus` is filled from the row's own gene calls before the chains
+are split: the locus its V call names (`IGKV1-39` is `IGK`), or without a V
+call, its J call's. It stays blank when the calls name none, or V and J
+disagree -- nothing is guessed -- and the counts are logged. On IEDB this
+recovers 436 of the 486 light chains it leaves untyped.
+
 ## Matching rules
 
 **Sequence region.** `CDR3` compares `cdr3_aa`, `VDJ` compares
 `sequence_aa`, and `CDRs` pools `cdr1_aa`, `cdr2_aa` and `cdr3_aa` under one
 shared tolerance. Pooling only works with Hamming distance, because edit
 distance does not add up across columns.
+
+**Blanks.** A row with a blank value in any compared column (say, no
+`cdr1_aa` under `CDRs`) has nothing to compare and never matches -- not
+even another blank. A blank query row gets no hit; a blank reference row is
+never hit.
 
 **Partition.** `V` and `VJ` only compare row pairs whose V-gene (and
 J-gene) agree; `VJL` also requires the same CDR3 length, and so needs
@@ -80,13 +90,14 @@ Change-O's gene pattern (`Genes.py`) and compared exactly at the
 
 | `gene_match` | Agrees | Disagrees |
 | --- | --- | --- |
-| `allele` | `IGHV1-2*02` / `IGHV1-2*02`; `IGHV1-2*02` / `IGHV1-2` (allele unknown) | `IGHV1-2*02` / `IGHV1-2*04` |
+| `allele` | `IGHV1-2*02` / `IGHV1-2*02` | `IGHV1-2*02` / `IGHV1-2*04`; `IGHV1-2*02` / `IGHV1-2` (no allele: a gene level match only) |
 | `gene` (default) | `IGHV1-2*02` / `IGHV1-2*04` / `IGHV1-2` | `IGHV1-2` / `IGHV1-69` |
 | `family` | `IGHV1-2*02` / `IGHV1-69*01` | `IGHV1-2` / `IGHV3-23` |
 
 A cell with several calls agrees if any one of them does. A blank or
-unrecognized call is **unknown and agrees with anything**; the number of
-unrecognized values is logged.
+unrecognized call **agrees with nothing**, not even another blank; the
+number of unrecognized values is logged. So under `VJ`, a row with no J
+call can never match -- use `V`, or no partition, to include such rows.
 
 **Threshold and metric.** An unset (or 1.0) `identity_threshold` is an
 exact match. Below that, a query may differ from a hit by up to
@@ -94,6 +105,10 @@ floor((1 - threshold) x query length) positions: substitutions only under
 `hamming`, or substitutions, insertions and deletions under `levenshtein`,
 which also lets the two differ in length. Hamming reports which positions
 differ; Levenshtein cannot, since an indel shifts every position after it.
+
+**X residues.** An `X` is an unresolved residue. Under exact and Hamming
+matching it matches any residue, so `CARXYW` equals `CARDYW`; under
+Levenshtein it is an ordinary letter.
 
 **Paired.** An antibody is its heavy (`IGH`) and light (`IGK`/`IGL`) chain
 rows sharing one `cell_id`. It matches a reference antibody only if that
@@ -104,22 +119,31 @@ and metric do not apply.
 
 ## Engine
 
-- **symscan runs every mode.** It is a required dependency, a
+- **symscan is the only engine.** It is a required dependency, a
   symmetric-deletion index that only looks at likely matches instead of
   scoring every query x reference pair. There is no install check and no
-  fallback to the pure-Python engine.
-- **Rows symscan cannot index are compared in Python** inside the same run:
-  an `X` wildcard (it has no wildcard concept; in Python `X` matches
-  anything under exact and Hamming matching), a distance above 14, or very
-  long sequences at a high tolerance, since symscan aborts the process past
-  those limits. Each symscan call is sized to stay within a fixed budget.
-- **Order of steps.** symscan measures distance first and drops pairs whose
-  genes disagree afterwards; the Python engine checks genes first and only
-  measures distance within agreeing pairs. The result is the same.
-- **`backend='python'`** runs the pure-Python engine only when chosen, e.g.
-  for comparison. symscan's index grows with the tolerance, so at a low
-  threshold (e.g. 0.7 on CDR3s) the Python engine can be faster; symscan's
-  advantage is at high thresholds on large tables.
+  pure-Python matcher.
+- **`X` through symscan.** symscan has no wildcard and compares `X` as a
+  letter, so the `X`s are taken out of the comparison instead: reference
+  rows are grouped by where their `X`s sit, and those positions are cut out
+  of them and of every same-length query before symscan sees them. A
+  query's own `X`s (rarer) are covered by slack -- one extra difference
+  each -- and every pair involving an `X` is re-scored with the wildcard
+  rule, keeping only those within the real threshold.
+- **Rows beyond symscan's limits are skipped.** symscan aborts the process
+  above 14 differences, or once its index -- every deletion variant of
+  every sequence, which grows steeply with length and tolerance -- outgrows
+  memory. Both the queries and the references are chunked to a fixed
+  budget, so table size alone never matters; what cannot fit at all (a
+  threshold allowing over 14 differences, `X` slack included, or one
+  sequence too long to index at that threshold) is left out of the
+  comparison, with a warning naming the query rows that may therefore miss
+  hits. On today's IEDB table that is a handful of outliers, such as
+  reference "CDR3s" of 60+ residues at a loose threshold. A VDJ comparison
+  (~120 residues) fits exact matching and thresholds of about 0.99 and up;
+  below that most VDJ rows are skipped.
+- **Order of steps.** symscan measures distance first; the exact-column and
+  gene checks are applied to the pairs it returns.
 
 ## Current limits
 
@@ -129,3 +153,5 @@ and metric do not apply.
 - Antibodies only: TCR tables are not supported yet (no `IGH` rows, so they
   are refused).
 - No substitution-matrix (BLOSUM) scoring.
+- Fuzzy VDJ matching below a threshold of about 0.99 is out of symscan's
+  reach, so those rows are skipped.
