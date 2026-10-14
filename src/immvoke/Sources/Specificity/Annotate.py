@@ -8,11 +8,8 @@ stage: download a specificity database (`immvoke specificity iedb download
 bcr`), which already lands as a real AIRR rearrangement TSV, then annotate a
 user's own AIRR table against it as the reference.
 
-Three ways to decide a hit today:
+Two pure-Python ways to decide a hit (an exact match is either at 0):
 
-    runExactAnnotation        a single column, byte-identical, CompAIRR
-                              accelerated (hash-based lookup, optionally
-                              gated by exact V/J-gene agreement)
     runFuzzyAnnotation        one or more columns, up to `max_mismatches`
                               substitutions allowed (pooled across columns
                               if more than one), pure Python
@@ -20,34 +17,28 @@ Three ways to decide a hit today:
                               substitutions/insertions/deletions combined,
                               pure Python (rapidfuzz)
 
-runPairedExactAnnotation builds on the exact criterion for the case where a
+runPairedExactAnnotation builds on an exact match for the case where a
 query row is one chain of an antibody rather than a self-contained unit: it
 runs it once per chain (heavy, light) and reconciles the two per antibody,
 classifying each as agreeing with the same reference antibody on both
 chains, one chain only, or neither.
 
-Symscan.py runs the same three criteria through symscan's
+Symscan.py runs the same criteria through symscan's
 symmetric-deletion index instead, returning the same result tables; it is
-the default engine for `immvoke annotate`, and the functions here remain
-the fallback (`--backend compairr`/`--backend python`), and the reference
-behaviour Symscan.py is tested against.
+the engine annotateSpecificity() uses. The pure-Python functions here run
+only when asked for (`--backend python`), never as a fallback, and are the
+reference behaviour Symscan.py is tested against.
 
-runExactAnnotation requires the compairr binary
-(https://github.com/uio-bmi/compairr, Rognes et al. 2022, Bioinformatics),
-built from source -- no external deps beyond a C++11 compiler and make:
-
-    git clone https://github.com/uio-bmi/compairr.git
-    cd compairr && make
-
-then either put the resulting `compairr` binary on PATH, or pass its path as
-`compairr_bin=`. compairr compares sequences literally and has no concept of
-the "X" wildcard runFuzzyAnnotation gives unresolved (e.g. PDB-derived)
-residues, and hard-errors on an empty/missing sequence value rather than
-treating it as a length-0 field -- see runExactAnnotation's docstring for how
-those rows are handled instead.
+annotateSpecificity() is the high level entry point `immvoke annotate`
+wraps: it picks among all of the above from a few knobs (sequence_region,
+partition_by, gene_match, paired, identity_threshold, distance_metric,
+backend) -- see its section at the end of this module. V/J-gene agreement
+there goes through Genes.py (`gene_cols`/`gene_match`), which parses gene
+calls rather than comparing them as strings; `exact_cols` compares plain
+strings.
 
 runLevenshteinAnnotation has neither the wildcard handling nor the
-length-bucketed index the other two share: Levenshtein distance lets a query
+length-bucketed index runFuzzyAnnotation has: Levenshtein distance lets a query
 and a candidate differ in length, so length can't prefilter candidates, and a
 wildcard has no clean meaning once an alignment can shift position. It also
 takes only a single column, unlike runFuzzyAnnotation -- see its section
@@ -64,9 +55,7 @@ later.
 __author__ = 'Pramod Shinde'
 
 # Imports
-import shutil
-import subprocess
-import tempfile
+import logging
 from pathlib import Path
 
 import pandas
@@ -74,14 +63,16 @@ from rapidfuzz.distance import Levenshtein
 
 # Immvoke imports
 from immvoke.Exceptions import AnnotationError
+from immvoke.Sources.Specificity.Genes import GENE_MATCH_LEVELS, buildGeneGate
+
+log = logging.getLogger(__name__)
 
 #: Reference column read as each hit's identifier when the caller does not
 #: say otherwise -- the AIRR rearrangement primary key.
 DEFAULT_ID_COL = 'sequence_id'
 #: A position where either side has this character never counts as a
-#: mismatch. Only meaningful to runFuzzyAnnotation and the pure-Python
-#: fallback runExactAnnotation uses for rows compairr cannot handle --
-#: compairr itself has no wildcard concept.
+#: mismatch, under Hamming distance (runFuzzyAnnotation, and symscan's own
+#: Python comparison of such rows).
 WILDCARD = 'X'
 
 #: runPairedExactAnnotation's fixed column names -- one antibody's heavy and
@@ -251,7 +242,8 @@ def buildAnnotationIndex(reference, compare_cols, id_col=DEFAULT_ID_COL,
         compare CDR3s within the same V-gene. None for no such gate.
 
     Returns:
-      dict: bucket key (see _bucketKey) to a list of (row_values, id) pairs.
+      dict: bucket key (see _bucketKey) to a list of (row_values, id,
+      reference position) tuples.
     """
     values = _rowValues(reference, compare_cols)
     exact_values = (_rowValues(reference, exact_cols) if exact_cols
@@ -259,16 +251,18 @@ def buildAnnotationIndex(reference, compare_cols, id_col=DEFAULT_ID_COL,
     ids = reference[id_col].tolist()
 
     index = {}
-    for row_values, row_exact, row_id in zip(values, exact_values, ids):
+    for position, (row_values, row_exact, row_id) in enumerate(
+            zip(values, exact_values, ids)):
         index.setdefault(_bucketKey(row_values, row_exact), []).append(
-            (row_values, row_id))
+            (row_values, row_id, position))
 
     return index
 
 
 def runFuzzyAnnotation(queries, reference, compare_cols, max_mismatches,
                        id_col=DEFAULT_ID_COL, exact_cols=None,
-                       threshold_is_fraction=False):
+                       threshold_is_fraction=False, gene_cols=None,
+                       gene_match='gene'):
     """
     Annotate each query row against `reference` allowing up to
     `max_mismatches` substitutions across `compare_cols` (pooled if more
@@ -294,6 +288,10 @@ def runFuzzyAnnotation(queries, reference, compare_cols, max_mismatches,
         15% mismatches) instead of a fixed count. Resolved to an absolute
         count once per query row, since every candidate in its bucket
         already shares its exact length.
+      gene_cols (list): gene call columns that must agree at `gene_match`
+        level first, e.g. `['v_call', 'j_call']`; blank or unrecognized
+        calls agree with anything (see Genes.py). None for no such gate.
+      gene_match (str): 'allele', 'gene' or 'family'; see Genes.py.
 
     Returns:
       pandas.DataFrame: one row per query row, columns `query_row`,
@@ -302,6 +300,7 @@ def runFuzzyAnnotation(queries, reference, compare_cols, max_mismatches,
       prefixed when `compare_cols` has more than one column).
     """
     index = buildAnnotationIndex(reference, compare_cols, id_col, exact_cols)
+    gate = buildGeneGate(queries, reference, gene_cols, gene_match)
     values = _rowValues(queries, compare_cols)
     exact_values = (_rowValues(queries, exact_cols) if exact_cols
                     else [()] * len(values))
@@ -314,7 +313,9 @@ def runFuzzyAnnotation(queries, reference, compare_cols, max_mismatches,
                         if threshold_is_fraction else max_mismatches)
 
         best_by_id = {}
-        for cand_values, row_id in candidates:
+        for cand_values, row_id, ref_row in candidates:
+            if gate is not None and not gate.agrees(query_row, ref_row):
+                continue
             distance = _rowDistance(row_values, cand_values)
             if distance is not None and distance <= max_distance:
                 if row_id not in best_by_id or distance < best_by_id[row_id][0]:
@@ -342,276 +343,25 @@ def runFuzzyAnnotation(queries, reference, compare_cols, max_mismatches,
     return pandas.DataFrame(rows)
 
 
-# ── CompAIRR-accelerated exact annotation (single column) ──────────────────
-
-def _findCompairr(compairr_bin):
-    """
-    Resolve the compairr binary to invoke.
-
-    Arguments:
-      compairr_bin (str): an explicit path, or None to search PATH.
-
-    Returns:
-      str: the resolved path.
-
-    Raises:
-      AnnotationError: if compairr is not on PATH and no path was given.
-    """
-    path = compairr_bin or shutil.which('compairr')
-    if path is None:
-        raise AnnotationError(
-            "compairr binary not found. Build it from source and either put "
-            "it on PATH or pass compairr_bin=<path>:\n"
-            "  git clone https://github.com/uio-bmi/compairr.git\n"
-            "  cd compairr && make")
-
-    return path
-
-
-def _writeAirrTsv(frame, id_col, seq_col, repertoire_id, path, vgene_col,
-                  jgene_col=None):
-    """
-    Write one side of a compairr comparison as a minimal AIRR TSV.
-
-    Arguments:
-      frame (pandas.DataFrame): the rows to write.
-      id_col (str): column to write as `sequence_id`.
-      seq_col (str): column to write as `junction_aa`.
-      repertoire_id (str): constant `repertoire_id` value -- compairr
-        compares one sequence field per repertoire; both sides here are
-        exactly one repertoire each.
-      path (Path): where to write the TSV.
-      vgene_col (str): column to write as `v_call`, or None.
-      jgene_col (str): column to write as `j_call`, or None.
-    """
-    out = pandas.DataFrame({
-        'repertoire_id': repertoire_id,
-        'sequence_id': frame[id_col].astype(str),
-        'junction_aa': frame[seq_col],
-        'duplicate_count': 1,
-    })
-    if vgene_col is not None or jgene_col is not None:
-        # compairr requires v_call *and* j_call unless -g is given; a shared
-        # 'na' constant on whichever side has no column keeps that side
-        # always agreeing, so only the column(s) actually given constrain
-        # hits (vgene_col alone, jgene_col alone, or both).
-        out['v_call'] = frame[vgene_col] if vgene_col is not None else 'na'
-        out['j_call'] = frame[jgene_col] if jgene_col is not None else 'na'
-    out.to_csv(path, sep='\t', index=False)
-
-
-def _runCompairrPairs(query_path, reference_path, use_genes, compairr_bin,
-                      threads=1):
-    """
-    Run compairr in exact (`-d 0`), cross-comparison (`-x`) mode.
-
-    Arguments:
-      query_path (Path): the query side, written by _writeAirrTsv.
-      reference_path (Path): the reference side, written by _writeAirrTsv.
-      use_genes (bool): whether v_call/j_call were written and should gate
-        agreement; False passes compairr's `-g` (ignore genes).
-      compairr_bin (str): the resolved binary path.
-      threads (int): compairr's own `-t`, 1-256.
-
-    Returns:
-      pandas.DataFrame: compairr's pairs output (`-p`): sequence_id_1
-      (query), sequence_id_2 (reference), distance (always 0 here).
-    """
-    with tempfile.TemporaryDirectory() as tmp:
-        out_path = Path(tmp) / 'existence.tsv'
-        pairs_path = Path(tmp) / 'pairs.tsv'
-        cmd = [
-            compairr_bin, '-x', str(query_path), str(reference_path),
-            '-d', '0',
-            '-f',  # ignore duplicate_count -- no real abundances are tracked
-            '--distance',
-            '-o', str(out_path),
-            '-p', str(pairs_path),
-            '-t', str(threads),
-        ]
-        if not use_genes:
-            cmd.append('-g')
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
-
-        return pandas.read_csv(pairs_path, sep='\t')
-
-
-def _pairsToHits(pairs):
-    """
-    Fold compairr's pairs output into a hit set per query row.
-
-    Arguments:
-      pairs (pandas.DataFrame): _runCompairrPairs's output.
-
-    Returns:
-      dict: query_row (int) to set of reference ids (str).
-    """
-    hits = {}
-    for row in pairs.itertuples(index=False):
-        query_row = int(row.sequence_id_1)
-        hits.setdefault(query_row, set()).add(str(row.sequence_id_2))
-
-    return hits
-
-
-def _fallbackExactAnnotation(queries_subset, reference_subset, seq_col, id_col,
-                             exact_cols):
-    """
-    Pure-Python exact annotation for the rows compairr cannot handle: an
-    'X' (unresolved residue) or blank `seq_col` value on either side.
-
-    Arguments:
-      queries_subset (pandas.DataFrame): query rows to check, keeping their
-        original position (query_row) as the DataFrame index.
-      reference_subset (pandas.DataFrame): reference rows to check against.
-      seq_col (str): the column being compared.
-      id_col (str): column in `reference_subset` holding each row's
-        identifier.
-      exact_cols (list): vgene_col/jgene_col to gate on, or None.
-
-    Returns:
-      dict: query_row (int) to set of reference ids (str), omitting query
-      rows with no hit.
-    """
-    if len(queries_subset) == 0 or len(reference_subset) == 0:
-        return {}
-
-    index = buildAnnotationIndex(reference_subset, [seq_col], id_col, exact_cols)
-    values = _rowValues(queries_subset, [seq_col])
-    exact_values = (_rowValues(queries_subset, exact_cols) if exact_cols
-                    else [()] * len(values))
-
-    hits = {}
-    for query_row, row_values, row_exact in zip(queries_subset.index, values,
-                                                 exact_values):
-        candidates = index.get(_bucketKey(row_values, row_exact), [])
-        matched = {str(row_id) for cand_values, row_id in candidates
-                  if _rowDistance(row_values, cand_values) == 0}
-        if matched:
-            hits[int(query_row)] = matched
-
-    return hits
-
-
-def runExactAnnotation(queries, reference, seq_col, id_col=DEFAULT_ID_COL,
-                       vgene_col=None, jgene_col=None, compairr_bin=None,
-                       threads=1):
-    """
-    Annotate each query row against `reference` on exact identity in
-    `seq_col`, optionally gated by exact `vgene_col`/`jgene_col` agreement
-    (either, both, or neither) -- CompAIRR accelerated: hash-based lookup
-    instead of a per-bucket scan, built for datasets far larger than a
-    pure-Python bucketed comparison handles comfortably.
-
-    'X' (e.g. an unresolved PDB-derived residue) and blank values have no
-    meaning to compairr, which errors on them outright, so any query or
-    reference row containing either is routed around compairr entirely and
-    resolved with the same wildcard-aware pure-Python comparison
-    runFuzzyAnnotation uses (module docstring): once for such query rows
-    against the *whole* reference set, and once for clean query rows against
-    the reference's own X/blank rows (compairr's bulk path below already
-    covers clean-vs-clean and can't see X-containing reference rows at all).
-    Results from all three sources are merged per query row.
-
-    Arguments:
-      queries (pandas.DataFrame): the input rows to annotate.
-      reference (pandas.DataFrame): the fixed table being annotated against.
-      seq_col (str): the single column to compare.
-      id_col (str): column in `reference` holding each row's identifier.
-      vgene_col (str): column requiring exact agreement, e.g. a V-gene call.
-      jgene_col (str): column requiring exact agreement, e.g. a J-gene call.
-      compairr_bin (str): path to the compairr binary, or None to search
-        PATH.
-      threads (int): compairr's own `-t` (1-256); only applies to the
-        clean-vs-clean bulk path, the Python fallback is single-threaded
-        regardless.
-
-    Returns:
-      pandas.DataFrame: one row per query row, columns `query_row`,
-      `n_hits_total`, `is_unique_hit`, `hit_ids` (semicolon joined, sorted).
-
-    Raises:
-      AnnotationError: if the compairr binary cannot be found.
-    """
-    compairr_bin = _findCompairr(compairr_bin)
-    exact_cols = [c for c in (vgene_col, jgene_col) if c is not None] or None
-    use_genes = vgene_col is not None or jgene_col is not None
-
-    queries = queries.reset_index(drop=True)
-    queries = queries.assign(**{seq_col: queries[seq_col].fillna('').astype(str)})
-    reference = reference.assign(**{seq_col: reference[seq_col].fillna('').astype(str)})
-    n = len(queries)
-
-    query_has_x = (queries[seq_col].str.contains(WILDCARD, regex=False)
-                  | (queries[seq_col] == ''))
-    reference_has_x = (reference[seq_col].str.contains(WILDCARD, regex=False)
-                       | (reference[seq_col] == ''))
-
-    clean_queries = queries[~query_has_x]
-    x_queries = queries[query_has_x]
-    clean_reference = reference[~reference_has_x]
-    x_reference = reference[reference_has_x]
-
-    hits = {}
-
-    def _merge(new):
-        for query_row, ids in new.items():
-            hits.setdefault(query_row, set()).update(ids)
-
-    # Clean query rows vs clean reference rows: bulk path, via compairr.
-    if len(clean_queries) and len(clean_reference):
-        with tempfile.TemporaryDirectory() as tmp:
-            query_path = Path(tmp) / 'query.tsv'
-            reference_path = Path(tmp) / 'reference.tsv'
-            _writeAirrTsv(clean_queries.assign(__query_row__=clean_queries.index),
-                         '__query_row__', seq_col, 'query', query_path,
-                         vgene_col, jgene_col)
-            _writeAirrTsv(clean_reference, id_col, seq_col, 'reference',
-                         reference_path, vgene_col, jgene_col)
-            pairs = _runCompairrPairs(query_path, reference_path, use_genes,
-                                      compairr_bin, threads)
-        _merge(_pairsToHits(pairs))
-
-    # X-containing or blank query rows vs the *whole* reference set.
-    _merge(_fallbackExactAnnotation(x_queries, reference, seq_col, id_col, exact_cols))
-
-    # Clean query rows vs X-containing/blank reference rows only.
-    _merge(_fallbackExactAnnotation(clean_queries, x_reference, seq_col, id_col,
-                                    exact_cols))
-
-    rows = []
-    for query_row in range(n):
-        hit_ids = sorted(hits.get(query_row, set()))
-        rows.append({
-            'query_row': query_row,
-            'n_hits_total': len(hit_ids),
-            'is_unique_hit': len(hit_ids) <= 1,
-            'hit_ids': ';'.join(hit_ids),
-        })
-
-    return pandas.DataFrame(rows)
-
-
 # ── paired heavy+light exact annotation ─────────────────────────────────────
 
 def _hitsByCellId(query_chain, chain_result, cell_id_col):
     """
-    Fold one chain's runExactAnnotation output into a hit set per antibody.
+    Fold one chain's exact match result into a hit set per antibody.
 
     Arguments:
-      query_chain (pandas.DataFrame): the query rows runExactAnnotation was
-        called on for this chain, in the same order (its index reset to
-        0..n-1, matching `chain_result`'s `query_row`).
-      chain_result (pandas.DataFrame): runExactAnnotation's output for
+      query_chain (pandas.DataFrame): the query rows matched for this
+        chain, in the same order (its index reset to 0..n-1, matching
+        `chain_result`'s `query_row`).
+      chain_result (pandas.DataFrame): the exact match result for
         `query_chain`.
       cell_id_col (str): column in `query_chain` identifying the antibody a
         chain row belongs to.
 
     Returns:
-      dict: query antibody id to the set of reference antibody ids (as read
-      off `id_col` when runExactAnnotation was called -- expected to be
-      `cell_id_col` on the reference side too) whose corresponding chain
-      agreed with it.
+      dict: query antibody id to the set of reference antibody ids (read off
+      the reference's `cell_id_col`) whose corresponding chain agreed with
+      it.
     """
     cell_ids = query_chain[cell_id_col].reset_index(drop=True)
     hits = {}
@@ -626,7 +376,7 @@ def _hitsByCellId(query_chain, chain_result, cell_id_col):
 
 def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
                              vgene_col='v_call', jgene_col='j_call',
-                             compairr_bin=None, threads=1, backend='symscan'):
+                             threads=1, backend='symscan', gene_match='gene'):
     """
     Classify each query antibody by whether the *same* reference antibody
     agrees with it on the heavy chain, the light chain, both, or neither.
@@ -634,8 +384,8 @@ def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
     An antibody is two rows of an AIRR table -- a heavy chain and, where
     present, a light chain -- sharing one `cell_id` and told apart by
     `locus` (`IGH` for heavy, `IGK`/`IGL` for light). Agreement on a chain
-    is runExactAnnotation's criterion (exact V-gene, exact J-gene, exact
-    CDR3), run once for the heavy rows and once for the light rows; a
+    is the same V-gene and J-gene (at `gene_match` level, see Genes.py) and
+    exact CDR3, run once for the heavy rows and once for the light rows; a
     reference antibody counts toward "both" only if its `cell_id` appears in
     *both* chains' hit sets for the query antibody, not merely in each
     independently -- a query whose heavy chain happens to match one
@@ -649,13 +399,13 @@ def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
       cdr3_col (str): the CDR3 amino acid column.
       vgene_col (str): the V-gene call column.
       jgene_col (str): the J-gene call column.
-      compairr_bin (str): path to the compairr binary, or None to search
-        PATH. Only used under backend='compairr'.
-      threads (int): compairr's own `-t`, or symscan's thread pool; see
-        runExactAnnotation and Symscan.runSymscanAnnotation.
-      backend (str): 'symscan' (Symscan.runSymscanExactAnnotation) or
-        'compairr' (runExactAnnotation) -- the engine behind each chain's
-        exact match; the result is the same either way.
+      threads (int): symscan's thread pool; see Symscan.runSymscanAnnotation.
+      backend (str): 'symscan' (Symscan.runSymscanAnnotation at 0
+        substitutions) or 'python' (runFuzzyAnnotation at 0 substitutions)
+        -- the engine behind each chain's exact match; the result is the
+        same either way.
+      gene_match (str): 'allele', 'gene' or 'family' -- how V/J-gene calls
+        are compared; blank or unrecognized calls agree with anything.
 
     Returns:
       pandas.DataFrame: one row per query `cell_id`: `classification` (one
@@ -674,23 +424,23 @@ def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
     reference_heavy = reference_heavy.reset_index(drop=True)
     reference_light = reference_light.reset_index(drop=True)
 
+    gene_cols = [c for c in (vgene_col, jgene_col) if c is not None] or None
     if backend == 'symscan':
         # Deferred: Symscan builds on this module's helpers.
-        from immvoke.Sources.Specificity.Symscan import runSymscanExactAnnotation
+        from immvoke.Sources.Specificity.Symscan import runSymscanAnnotation
 
         def _exact(query_chain, reference_chain):
-            return runSymscanExactAnnotation(query_chain, reference_chain, cdr3_col,
-                                             id_col=CELL_ID_COL, vgene_col=vgene_col,
-                                             jgene_col=jgene_col, threads=threads)
-    elif backend == 'compairr':
+            return runSymscanAnnotation(query_chain, reference_chain, [cdr3_col], 0,
+                                        id_col=CELL_ID_COL, gene_cols=gene_cols,
+                                        gene_match=gene_match, threads=threads)
+    elif backend == 'python':
         def _exact(query_chain, reference_chain):
-            return runExactAnnotation(query_chain, reference_chain, cdr3_col,
-                                      id_col=CELL_ID_COL, vgene_col=vgene_col,
-                                      jgene_col=jgene_col,
-                                      compairr_bin=compairr_bin, threads=threads)
+            return runFuzzyAnnotation(query_chain, reference_chain, [cdr3_col], 0,
+                                      id_col=CELL_ID_COL, gene_cols=gene_cols,
+                                      gene_match=gene_match)
     else:
         raise AnnotationError("unknown backend %r for paired annotation; choose "
-                              "'symscan' or 'compairr'" % (backend,))
+                              "'symscan' or 'python'" % (backend,))
 
     heavy_result = _exact(query_heavy, reference_heavy)
     light_result = _exact(query_light, reference_light)
@@ -740,7 +490,9 @@ def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
 # the way Hamming distance pools cleanly across columns.
 
 def runLevenshteinAnnotation(queries, reference, seq_col, max_edits,
-                             id_col=DEFAULT_ID_COL, exact_cols=None):
+                             id_col=DEFAULT_ID_COL, exact_cols=None,
+                             threshold_is_fraction=False, gene_cols=None,
+                             gene_match='gene'):
     """
     Annotate each query row against `reference` allowing up to `max_edits`
     substitutions, insertions and deletions combined in `seq_col` -- the
@@ -751,11 +503,17 @@ def runLevenshteinAnnotation(queries, reference, seq_col, max_edits,
       queries (pandas.DataFrame): the input rows to annotate.
       reference (pandas.DataFrame): the fixed table being annotated against.
       seq_col (str): the single column to compare.
-      max_edits (int): the edit-distance tolerance (substitutions +
-        insertions + deletions combined).
+      max_edits (float): the edit-distance tolerance (substitutions +
+        insertions + deletions combined) -- an absolute count, or a fraction
+        of the query's length when `threshold_is_fraction` is True.
       id_col (str): column in `reference` holding each row's identifier.
       exact_cols (list): column names that must agree exactly first, e.g.
         `['v_call', 'j_call']`. None for no such gate.
+      threshold_is_fraction (bool): treat `max_edits` as a fraction of the
+        query's `seq_col` length (e.g. 0.1 allows up to 10% edits) instead
+        of a fixed count, resolved to a whole count once per query row.
+      gene_cols (list): see runFuzzyAnnotation.
+      gene_match (str): see runFuzzyAnnotation.
 
     Returns:
       pandas.DataFrame: one row per query row, columns `query_row`,
@@ -768,9 +526,10 @@ def runLevenshteinAnnotation(queries, reference, seq_col, max_edits,
     reference_ids = reference[id_col].tolist()
 
     buckets = {}
-    for seq, exact_values, row_id in zip(reference_seqs, reference_exact,
-                                         reference_ids):
-        buckets.setdefault(exact_values, []).append((seq, row_id))
+    for ref_row, (seq, exact_values, row_id) in enumerate(
+            zip(reference_seqs, reference_exact, reference_ids)):
+        buckets.setdefault(exact_values, []).append((seq, row_id, ref_row))
+    gate = buildGeneGate(queries, reference, gene_cols, gene_match)
 
     query_exact = (_rowValues(queries, exact_cols) if exact_cols
                   else [()] * len(queries))
@@ -778,11 +537,15 @@ def runLevenshteinAnnotation(queries, reference, seq_col, max_edits,
 
     rows = []
     for query_row, (query_seq, row_exact) in enumerate(zip(query_seqs, query_exact)):
+        limit = (_allowedDifferences(max_edits, len(query_seq))
+                 if threshold_is_fraction else int(max_edits))
         best_by_id = {}
-        for cand_seq, row_id in buckets.get(row_exact, []):
+        for cand_seq, row_id, ref_row in buckets.get(row_exact, []):
+            if gate is not None and not gate.agrees(query_row, ref_row):
+                continue
             distance = Levenshtein.distance(query_seq, cand_seq,
-                                            score_cutoff=max_edits)
-            if distance <= max_edits:
+                                            score_cutoff=limit)
+            if distance <= limit:
                 if row_id not in best_by_id or distance < best_by_id[row_id]:
                     best_by_id[row_id] = distance
 
@@ -797,3 +560,418 @@ def runLevenshteinAnnotation(queries, reference, seq_col, max_edits,
         })
 
     return pandas.DataFrame(rows)
+
+
+# ── high level API: annotateSpecificity() ───────────────────────────────────
+#
+# A file-or-DataFrame-in, DataFrame-and-file-out entry point over the
+# primitives above, for a caller who wants "match this receptor table against
+# that reference table" without choosing which run*Annotation to call. It
+# picks one from a small set of knobs (sequence_region, partition_by,
+# identity_threshold, distance_metric, backend) -- the flow `immvoke annotate`
+# exposes on the commandline:
+#
+#     paired  -> runPairedExactAnnotation (exact V, J, CDR3 on both chains)
+#     else    -> heavy chain only -> sequence_region columns
+#             -> partition_by gate (none, V, VJ, VJ + CDR3 length)
+#             -> identity_threshold: 1.0 exact, below it Hamming/Levenshtein
+#             -> backend: symscan (a required dependency), or Python only
+#                when asked for -- never as a fallback
+#                (symscan itself compares in Python what it cannot index,
+#                e.g. a distance above Symscan.MAX_DISTANCE)
+
+#: sequence_region -> AIRR column(s) to compare. 'CDRs' pools CDR1-3, so it
+#: only runs under Hamming distance (or an exact match), never Levenshtein --
+#: see the Levenshtein section note on why edit distance does not pool.
+SEQUENCE_REGION_COLUMNS = {
+    'cdr3': ('cdr3_aa',),
+    'vdj': ('sequence_aa',),
+    'cdrs': ('cdr1_aa', 'cdr2_aa', 'cdr3_aa'),
+}
+
+#: partition_by -> gene call columns two rows must agree on (at gene_match
+#: level, see Genes.py) before their sequence counts as a hit. 'VJL' also
+#: gates on exact CDR3 length; see annotateSpecificity.
+PARTITION_GENE_COLUMNS = {
+    'v': ('v_call',),
+    'vj': ('v_call', 'j_call'),
+    'vjl': ('v_call', 'j_call'),
+}
+
+#: distance_metric values accepted ('levenstein' is a common misspelling).
+DISTANCE_METRICS = {'hamming': 'hamming', 'levenshtein': 'levenshtein',
+                    'levenstein': 'levenshtein'}
+
+#: backend values accepted. symscan, a required dependency, is the default;
+#: python runs only when asked for, never as a fallback.
+BACKENDS = ('symscan', 'python')
+
+#: Synthetic gate column added to both tables under partition_by='VJL'; it
+#: only feeds the exact-column gate and is never written to the result.
+_CDR3_LENGTH_COL = '__cdr3_length__'
+
+
+def _resolveSequenceRegion(sequence_region):
+    """
+    Arguments:
+      sequence_region (str): 'CDR3', 'VDJ' or 'CDRs', case insensitive.
+
+    Returns:
+      list: the AIRR column(s) to compare.
+
+    Raises:
+      AnnotationError: if `sequence_region` is not recognized.
+    """
+    columns = SEQUENCE_REGION_COLUMNS.get(str(sequence_region).strip().lower())
+    if columns is None:
+        raise AnnotationError("unknown sequence_region %r; choose one of: CDR3, "
+                              "VDJ, CDRs" % (sequence_region,))
+
+    return list(columns)
+
+
+def _resolvePartitionBy(partition_by):
+    """
+    Arguments:
+      partition_by (str): None, 'V', 'VJ' or 'VJL', case insensitive.
+
+    Returns:
+      tuple: (gate columns (list), whether to also gate on CDR3 length).
+
+    Raises:
+      AnnotationError: if `partition_by` is not recognized.
+    """
+    if partition_by is None:
+        return [], False
+
+    key = str(partition_by).strip().lower()
+    columns = PARTITION_GENE_COLUMNS.get(key)
+    if columns is None:
+        raise AnnotationError("unknown partition_by %r; choose one of: None, V, "
+                              "VJ, VJL" % (partition_by,))
+
+    return list(columns), key == 'vjl'
+
+
+def _resolveDistanceMetric(distance_metric):
+    """
+    Arguments:
+      distance_metric (str): 'hamming' or 'levenshtein', case insensitive.
+
+    Returns:
+      str: 'hamming' or 'levenshtein'.
+
+    Raises:
+      AnnotationError: if `distance_metric` is not recognized.
+    """
+    metric = DISTANCE_METRICS.get(str(distance_metric).strip().lower())
+    if metric is None:
+        raise AnnotationError("unknown distance_metric %r; choose 'hamming' or "
+                              "'levenshtein'" % (distance_metric,))
+
+    return metric
+
+
+def _resolveBackend(backend):
+    """
+    Validate `backend`, the engine that will run.
+
+    Arguments:
+      backend (str): one of BACKENDS, case insensitive.
+
+    Returns:
+      str: 'symscan' or 'python'.
+
+    Raises:
+      AnnotationError: if `backend` is not recognized.
+    """
+    name = str(backend).strip().lower()
+    if name not in BACKENDS:
+        raise AnnotationError("unknown backend %r; choose one of: %s"
+                              % (backend, ', '.join(BACKENDS)))
+    log.info('matching backend: %s', name)
+
+    return name
+
+
+def _readAirrTsv(table):
+    """
+    Read an AIRR rearrangement TSV as plain text columns.
+
+    Arguments:
+      table (str or pandas.DataFrame): the file to read, or an already
+        loaded table (returned as is).
+
+    Returns:
+      pandas.DataFrame: every column as a string, blank cells as '' rather
+      than NaN -- the row comparisons here expect a value to always be a
+      string.
+    """
+    if isinstance(table, pandas.DataFrame):
+        return table
+
+    return pandas.read_csv(table, sep='\t', dtype=str, na_filter=False)
+
+
+def _requireColumns(frame, columns, label, why):
+    """
+    Raise a readable error, instead of a KeyError, for a missing column.
+
+    Arguments:
+      frame (pandas.DataFrame): the table to check.
+      columns (list): the column names it needs.
+      label (str): 'query' or 'reference', for the message.
+      why (str): what needs them, for the message.
+
+    Raises:
+      AnnotationError: if any of `columns` is missing from `frame`.
+    """
+    missing = [c for c in columns if c not in frame.columns]
+    if missing:
+        raise AnnotationError('%s has no %s column, needed by %s'
+                              % (label, ', '.join(repr(c) for c in missing), why))
+
+
+def _restrictToHeavyChain(frame, label):
+    """
+    Keep only the heavy chain (locus IGH), if `frame` has a locus column; a
+    table without one is kept whole.
+
+    Arguments:
+      frame (pandas.DataFrame): the table to filter.
+      label (str): 'query' or 'reference', for messages.
+
+    Returns:
+      pandas.DataFrame: the filtered table, index reset to 0..n-1.
+
+    Raises:
+      AnnotationError: if no row is left -- rather than silently annotating
+        nothing.
+    """
+    if LOCUS_COL in frame.columns:
+        filtered = frame[frame[LOCUS_COL] == HEAVY_LOCUS]
+        log.info('%s: %d/%d rows are locus %s', label, len(filtered), len(frame),
+                 HEAVY_LOCUS)
+        if not len(filtered):
+            raise AnnotationError(
+                '%s has no heavy chain rows (locus %s) to annotate; its loci '
+                'are: %s' % (label, HEAVY_LOCUS,
+                             ', '.join(sorted(set(frame[LOCUS_COL]))) or 'none'))
+        frame = filtered
+
+    return frame.reset_index(drop=True)
+
+
+def _requireAirr(frame, label):
+    """
+    Require `frame` to be an AIRR rearrangement table: every field the AIRR
+    schema marks required present as a column (its values may be blank).
+
+    Arguments:
+      frame (pandas.DataFrame): the table to check.
+      label (str): 'query' or 'reference', for the message.
+
+    Raises:
+      AnnotationError: naming the missing required fields.
+    """
+    from airr.schema import RearrangementSchema, ValidationError
+
+    try:
+        RearrangementSchema.validate_header(list(frame.columns))
+    except ValidationError as error:
+        raise AnnotationError('%s is not an AIRR rearrangement table: %s'
+                              % (label, error)) from None
+
+
+def _runSingleChain(queries, reference, compare_cols, gene_cols, exact_cols,
+                    gene_match, threshold, metric, backend, threads):
+    """
+    Run one single-chain comparison on `backend`.
+
+    Arguments:
+      queries (pandas.DataFrame): the query rows, already filtered.
+      reference (pandas.DataFrame): the reference rows, already filtered.
+      compare_cols (list): the column(s) to compare.
+      gene_cols (list): gene call columns that must agree at `gene_match`
+        level, possibly empty.
+      exact_cols (list): columns that must agree exactly, possibly empty.
+      gene_match (str): 'allele', 'gene' or 'family'.
+      threshold (float): identity in (0.0, 1.0]; 1.0 is an exact match.
+      metric (str): 'hamming' or 'levenshtein'.
+      backend (str): 'symscan' or 'python'.
+      threads (int): symscan's thread pool; see annotateSpecificity.
+
+    Returns:
+      pandas.DataFrame: one row per query row, see runFuzzyAnnotation.
+    """
+    exact = threshold >= 1.0
+    # An exact match is 0 substitutions under either metric -- the same
+    # thing, and the only way to run exact agreement on pooled 'CDRs'.
+    distance_type = 'hamming' if exact else metric
+    tolerance = 0 if exact else 1 - threshold
+    gates = dict(id_col=DEFAULT_ID_COL, exact_cols=exact_cols or None,
+                 gene_cols=gene_cols or None, gene_match=gene_match)
+
+    if backend == 'symscan':
+        # Deferred: Symscan builds on this module's helpers.
+        from immvoke.Sources.Specificity.Symscan import runSymscanAnnotation
+
+        return runSymscanAnnotation(queries, reference, compare_cols, tolerance,
+                                    distance_type=distance_type,
+                                    threshold_is_fraction=not exact,
+                                    threads=threads, **gates)
+
+    if distance_type == 'hamming':
+        return runFuzzyAnnotation(queries, reference, compare_cols, tolerance,
+                                  threshold_is_fraction=not exact, **gates)
+
+    return runLevenshteinAnnotation(queries, reference, compare_cols[0], tolerance,
+                                    threshold_is_fraction=True, **gates)
+
+
+def _writeIfRequested(result, output):
+    """
+    Write `result` to `output` as a TSV, if a path was given.
+
+    Arguments:
+      result (pandas.DataFrame): the annotation result.
+      output (str): where to write it, or None to skip writing.
+    """
+    if output is None:
+        return
+
+    out = Path(output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    result.to_csv(out, sep='\t', index=False)
+    log.info('wrote %s', out)
+
+
+def annotateSpecificity(query, reference, sequence_region='CDR3',
+                        partition_by=None, paired=False, identity_threshold=None,
+                        distance_metric='hamming', gene_match='gene', threads=1,
+                        output=None, backend='symscan'):
+    """
+    Annotate a query receptor table against a reference specificity table.
+
+    Arguments:
+      query (str or pandas.DataFrame): the query AIRR rearrangement TSV, or
+        the table itself.
+      reference (str or pandas.DataFrame): the reference AIRR rearrangement
+        TSV -- e.g. a specificity database's downloaded table -- or the
+        table itself. It must be an AIRR rearrangement table: every field
+        the AIRR schema requires present as a column (values may be blank),
+        as immvoke's own AIRR writer always produces.
+      sequence_region (str): which sequence to compare: 'CDR3' (cdr3_aa),
+        'VDJ' (sequence_aa, the full V(D)J amino acid sequence) or 'CDRs'
+        (cdr1_aa, cdr2_aa and cdr3_aa pooled -- Hamming only). Ignored when
+        `paired` is True.
+      partition_by (str): only compare row pairs in the same partition: None
+        (no restriction), 'V' (same V-gene), 'VJ' (same V- and J-gene) or
+        'VJL' (same V-gene, J-gene and CDR3 length -- needs `cdr3_aa` in both
+        tables whatever `sequence_region` is). Ignored when `paired` is True.
+      paired (bool): classify each query antibody (`cell_id`) by V-gene,
+        J-gene and exact CDR3 agreement on both its heavy and light chain
+        with the same reference antibody (runPairedExactAnnotation). When
+        False, only heavy chain (locus IGH) rows are compared; a table
+        without a locus column is compared whole.
+      gene_match (str): how `partition_by` and `paired` compare v_call/
+        j_call: 'allele' (same gene and allele), 'gene' (the default: same
+        gene, any allele) or 'family'. A row with several calls agrees if
+        any one does; a blank or unrecognized call is unknown and agrees
+        with anything. See Genes.py.
+      identity_threshold (float): minimum sequence identity in (0.0, 1.0];
+        None or 1.0 requires an exact match, a lower value allows up to
+        floor((1 - identity_threshold) * query length) differences. Ignored
+        when `paired` is True.
+      distance_metric (str): 'hamming' (substitutions only) or 'levenshtein'
+        (substitutions, insertions and deletions; a single-column
+        `sequence_region` only, i.e. not 'CDRs'). Only matters when
+        `identity_threshold` is below 1.0.
+      threads (int): symscan's thread pool size (-1 for every core); only
+        the first symscan run in a process sets it. The python backend is
+        single threaded.
+      output (str): if given, also write the result here as a TSV.
+      backend (str): 'symscan' (the default) or 'python' (only when asked
+        for; never used as a fallback). Either gives the same result;
+        symscan compares in Python whatever it cannot index (an 'X'
+        wildcard, a distance above 14, very long sequences at a high
+        tolerance).
+
+    Returns:
+      pandas.DataFrame: when `paired`, one row per query `cell_id` (see
+      runPairedExactAnnotation); otherwise one row per heavy chain query
+      row, every one of them -- 0 hits if unmatched -- with `query_row`,
+      `n_hits_total`, `min_mismatches`, `is_unique_hit`, `hit_ids` (plus
+      `mismatch_positions` under Hamming).
+
+    Raises:
+      AnnotationError: if the reference is not an AIRR rearrangement table,
+        an argument is not recognized, a needed column is missing, no heavy
+        chain row is left to annotate, or an argument combination cannot
+        run (e.g. 'CDRs' under 'levenshtein').
+    """
+    if gene_match not in GENE_MATCH_LEVELS:
+        raise AnnotationError('unknown gene_match %r; choose one of: %s'
+                              % (gene_match, ', '.join(GENE_MATCH_LEVELS)))
+    backend = _resolveBackend(backend)
+    queries = _readAirrTsv(query)
+    ref = _readAirrTsv(reference)
+    _requireAirr(ref, 'reference')
+
+    if paired:
+        if partition_by is not None or identity_threshold is not None:
+            log.warning('paired annotation always compares V-gene, J-gene and '
+                        'exact CDR3; partition_by and identity_threshold are '
+                        'ignored')
+        paired_cols = [CELL_ID_COL, LOCUS_COL, 'cdr3_aa', 'v_call', 'j_call']
+        _requireColumns(queries, paired_cols, 'query', 'paired annotation')
+        _requireColumns(ref, paired_cols, 'reference', 'paired annotation')
+        chain_loci = (HEAVY_LOCUS,) + LIGHT_LOCI
+        for frame, label in ((queries, 'query'), (ref, 'reference')):
+            if not frame[LOCUS_COL].isin(chain_loci).any():
+                raise AnnotationError('%s has no antibody chain rows (locus %s) '
+                                      'to pair' % (label, ', '.join(chain_loci)))
+        result = runPairedExactAnnotation(queries, ref, threads=threads,
+                                          backend=backend, gene_match=gene_match)
+        log.info('%d query antibodies: %s', len(result),
+                 ', '.join('%s=%d' % (label, count) for label, count
+                          in result['classification'].value_counts().items()))
+        _writeIfRequested(result, output)
+
+        return result
+
+    threshold = 1.0 if identity_threshold is None else float(identity_threshold)
+    if not 0 < threshold <= 1.0:
+        raise AnnotationError('identity_threshold must be in (0.0, 1.0]; got %s'
+                              % (identity_threshold,))
+    compare_cols = _resolveSequenceRegion(sequence_region)
+    gene_cols, gate_on_cdr3_length = _resolvePartitionBy(partition_by)
+    metric = _resolveDistanceMetric(distance_metric)
+    if threshold < 1.0 and metric == 'levenshtein' and len(compare_cols) != 1:
+        raise AnnotationError("distance_metric='levenshtein' compares a single "
+                              "column; sequence_region=%r pools %d, which only "
+                              "'hamming' supports"
+                              % (sequence_region, len(compare_cols)))
+
+    needed = compare_cols + gene_cols + (['cdr3_aa'] if gate_on_cdr3_length else [])
+    why = 'sequence_region=%r, partition_by=%r' % (sequence_region, partition_by)
+    _requireColumns(queries, needed, 'query', why)
+    _requireColumns(ref, needed + [DEFAULT_ID_COL], 'reference', why)
+
+    queries = _restrictToHeavyChain(queries, 'query')
+    ref = _restrictToHeavyChain(ref, 'reference')
+    exact_cols = []
+    if gate_on_cdr3_length:
+        queries = queries.assign(
+            **{_CDR3_LENGTH_COL: queries['cdr3_aa'].str.len().astype(str)})
+        ref = ref.assign(**{_CDR3_LENGTH_COL: ref['cdr3_aa'].str.len().astype(str)})
+        exact_cols = [_CDR3_LENGTH_COL]
+
+    result = _runSingleChain(queries, ref, compare_cols, gene_cols, exact_cols,
+                             gene_match, threshold, metric, backend, threads)
+    hit = int(result['n_hits_total'].gt(0).sum())
+    log.info('%d query rows, %d with at least one hit, %d unique (0 or 1 hit)',
+             len(result), hit, int(result['is_unique_hit'].sum()))
+    _writeIfRequested(result, output)
+
+    return result

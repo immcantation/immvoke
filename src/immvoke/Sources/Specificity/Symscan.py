@@ -4,18 +4,18 @@ symscan-accelerated annotation: exact, Hamming and Levenshtein
     runSymscanAnnotation       up to `max_distance` substitutions
                                (distance_type 'hamming', one or more pooled
                                columns) or substitutions/insertions/deletions
-                               combined ('levenshtein', a single column)
-    runSymscanExactAnnotation  exact identity in a single column, optionally
-                               gated by exact V/J-gene agreement -- the same
-                               arguments and result table as
-                               Annotate.runExactAnnotation, without needing
-                               the compairr binary
+                               combined ('levenshtein', a single column); an
+                               exact match is `max_distance` 0
 
 symscan (https://github.com/yutanagano/symscan) builds a Rust
 symmetric-deletion index and only ever looks at likely matches, rather than
 scoring every query x reference pair -- so it stays fast as the reference
-grows. Each function returns the same result table as its pure-Python (or
-CompAIRR) counterpart in Annotate.py, so the two are interchangeable.
+grows. It returns the same result table as its pure-Python counterpart in
+Annotate.py, so the two are interchangeable.
+
+symscan has no gate of its own: `exact_cols` (exact string agreement) and
+`gene_cols` (V/J-gene agreement at `gene_match` level, see Genes.py) are
+applied to the pairs it returns -- distance first, gene check second.
 
 symscan cannot compare every row, so the rows it cannot are compared in
 Python instead, under the same rules, and merged with its own pairs:
@@ -67,6 +67,7 @@ from immvoke.Sources.Specificity.Annotate import (
     _rowDistance,
     _rowValues,
 )
+from immvoke.Sources.Specificity.Genes import buildGeneGate
 
 log = logging.getLogger(__name__)
 
@@ -331,7 +332,8 @@ def _levenshteinPairs(query_seqs, query_exact, ref_seqs, ref_exact, limits,
 
 def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
                          distance_type='hamming', id_col=DEFAULT_ID_COL,
-                         exact_cols=None, threshold_is_fraction=False, threads=1):
+                         exact_cols=None, threshold_is_fraction=False, threads=1,
+                         gene_cols=None, gene_match='gene'):
     """
     Annotate each query row against `reference` allowing up to
     `max_distance` differences in `compare_cols`, via
@@ -339,8 +341,9 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
 
     symscan has no gate of its own, so `exact_cols` (and, for a pooled
     multi-column Hamming comparison, each column's length -- the same
-    per-column length rule Annotate.runFuzzyAnnotation buckets on) is
-    applied to the pairs symscan returns rather than before it runs. Rows
+    per-column length rule Annotate.runFuzzyAnnotation buckets on) and
+    `gene_cols` are applied to the pairs symscan returns rather than before
+    it runs: the distance comes first, the gene check second. Rows
     symscan cannot compare are compared in Python; see the module note.
 
     Arguments:
@@ -360,6 +363,10 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
         the query's length instead of a fixed count.
       threads (int): rayon worker threads (-1 for every available core);
         only the first call in a process sets this -- see the module note.
+      gene_cols (list): gene call columns that must agree at `gene_match`
+        level, e.g. `['v_call', 'j_call']`; blank or unrecognized calls
+        agree with anything (see Genes.py). None for no such gate.
+      gene_match (str): 'allele', 'gene' or 'family'; see Genes.py.
 
     Returns:
       pandas.DataFrame: one row per query row, columns `query_row`,
@@ -441,6 +448,10 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
         found.append(_hammingPairs(query_values, query_exact, ref_values, ref_exact,
                                    limits, clean_queries, x_refs))
     rows, cols, dists = _concat(found)
+    gate = buildGeneGate(queries, reference, gene_cols, gene_match)
+    if gate is not None:
+        keep = gate.keep(rows, cols)
+        rows, cols, dists = rows[keep], cols[keep], dists[keep]
 
     ref_ids = reference[id_col].to_numpy()
     pairs = pandas.DataFrame({'query_row': rows, 'col': cols, 'dist': dists,
@@ -475,35 +486,3 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
     result['is_unique_hit'] = result['n_hits_total'] <= 1
 
     return result[columns]
-
-
-def runSymscanExactAnnotation(queries, reference, seq_col, id_col=DEFAULT_ID_COL,
-                              vgene_col=None, jgene_col=None, threads=1):
-    """
-    Annotate each query row against `reference` on exact identity in
-    `seq_col`, optionally gated by exact `vgene_col`/`jgene_col` agreement
-    (either, both, or neither) -- a 0-substitution runSymscanAnnotation.
-
-    Same criterion as Annotate.runExactAnnotation, including its 'X'
-    wildcard and blank-value rules, and the same result table; only the
-    engine differs.
-
-    Arguments:
-      queries (pandas.DataFrame): the input rows to annotate.
-      reference (pandas.DataFrame): the fixed table being annotated against.
-      seq_col (str): the single column to compare.
-      id_col (str): column in `reference` holding each row's identifier.
-      vgene_col (str): column requiring exact agreement, e.g. a V-gene call.
-      jgene_col (str): column requiring exact agreement, e.g. a J-gene call.
-      threads (int): see runSymscanAnnotation.
-
-    Returns:
-      pandas.DataFrame: one row per query row, columns `query_row`,
-      `n_hits_total`, `is_unique_hit`, `hit_ids` (semicolon joined, sorted).
-    """
-    exact_cols = [c for c in (vgene_col, jgene_col) if c is not None] or None
-    result = runSymscanAnnotation(queries.reset_index(drop=True), reference, [seq_col],
-                                  0, distance_type='hamming', id_col=id_col,
-                                  exact_cols=exact_cols, threads=threads)
-
-    return result[['query_row', 'n_hits_total', 'is_unique_hit', 'hit_ids']]

@@ -22,7 +22,6 @@ from immvoke.Sources.Specificity.Annotate import (
 from immvoke.Sources.Specificity.Symscan import (
     MAX_DISTANCE,
     runSymscanAnnotation,
-    runSymscanExactAnnotation,
 )
 
 
@@ -198,31 +197,29 @@ class TestRunSymscanAnnotation(unittest.TestCase):
         self.assertEqual(spy.call_args.args, (['CARDYW'], ['CARQYW']))
 
 
-class TestRunSymscanExactAnnotation(unittest.TestCase):
+class TestSymscanExactMatch(unittest.TestCase):
     """
-    Tests for the symscan counterpart of Annotate.runExactAnnotation
+    Tests for an exact match: runSymscanAnnotation at 0 substitutions
     """
 
-    def test_result_table_matches_run_exact_annotation(self):
+    def test_exact_cols_gate_an_exact_match(self):
         queries = frame([{'cdr3': 'CARDYW', 'v_call': 'V1', 'j_call': 'J1'},
                          {'cdr3': 'CARDYW', 'v_call': 'V2', 'j_call': 'J1'},
                          {'cdr3': 'CARDY', 'v_call': 'V1', 'j_call': 'J1'}])
         reference = frame([{'id': 'r2', 'cdr3': 'CARDYW', 'v_call': 'V1', 'j_call': 'J1'},
                            {'id': 'r1', 'cdr3': 'CARDYW', 'v_call': 'V1', 'j_call': 'J1'}])
 
-        result = runSymscanExactAnnotation(queries, reference, 'cdr3', id_col='id',
-                                           vgene_col='v_call', jgene_col='j_call')
+        result = runSymscanAnnotation(queries, reference, ['cdr3'], 0, id_col='id',
+                                      exact_cols=['v_call', 'j_call'])
 
-        self.assertEqual(result.columns.tolist(),
-                         ['query_row', 'n_hits_total', 'is_unique_hit', 'hit_ids'])
         self.assertEqual(result['hit_ids'].tolist(), ['r1;r2', '', ''])
         self.assertEqual(result['is_unique_hit'].tolist(), [False, True, True])
 
-    def test_blank_matches_blank_as_compairr_fallback_does(self):
+    def test_blank_matches_blank(self):
         queries = frame([{'cdr3': ''}])
         reference = frame([{'id': 'r1', 'cdr3': ''}, {'id': 'r2', 'cdr3': 'A'}])
 
-        result = runSymscanExactAnnotation(queries, reference, 'cdr3', id_col='id')
+        result = runSymscanAnnotation(queries, reference, ['cdr3'], 0, id_col='id')
 
         self.assertEqual(result['hit_ids'].tolist(), ['r1'])
 
@@ -298,20 +295,18 @@ class TestSymscanMatchesPython(unittest.TestCase):
                                                           check_dtype=False)
 
     def test_exact(self):
-        """runExactAnnotation's criterion is its Python fallback's: zero
-        wildcard-aware substitutions, gated on whichever genes are given."""
+        """An exact match is zero wildcard-aware substitutions, gated on
+        whichever genes are given."""
         for seed in range(5):
             queries, reference = self._tables(seed)
-            for genes in ((None, None), ('v_call', None), ('v_call', 'j_call')):
-                with self.subTest(seed=seed, genes=genes):
-                    exact_cols = [c for c in genes if c] or None
+            for exact_cols in (None, ['v_call'], ['v_call', 'j_call']):
+                with self.subTest(seed=seed, exact_cols=exact_cols):
                     expected = runFuzzyAnnotation(queries, reference, ['cdr3'], 0,
                                                   id_col='id', exact_cols=exact_cols)
-                    result = runSymscanExactAnnotation(queries, reference, 'cdr3',
-                                                       id_col='id', vgene_col=genes[0],
-                                                       jgene_col=genes[1])
-                    pandas.testing.assert_frame_equal(
-                        result, expected[result.columns.tolist()], check_dtype=False)
+                    result = runSymscanAnnotation(queries, reference, ['cdr3'], 0,
+                                                  id_col='id', exact_cols=exact_cols)
+                    pandas.testing.assert_frame_equal(result, expected,
+                                                      check_dtype=False)
 
 
 if __name__ == '__main__':
