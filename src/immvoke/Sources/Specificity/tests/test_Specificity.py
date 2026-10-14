@@ -45,9 +45,9 @@ def blankReceptorRow():
     for chain_label in ('Chain 1', 'Chain 2'):
         for column in ('Type', 'Nucleotide Sequence', 'Protein Sequence'):
             row[(chain_label, column)] = ''
-        for curated, calculated in _CHAIN_PREFERRED.values():
-            row[(chain_label, curated)] = ''
-            row[(chain_label, calculated)] = ''
+        for preferred, fallback in _CHAIN_PREFERRED.values():
+            row[(chain_label, preferred)] = ''
+            row[(chain_label, fallback)] = ''
         for column in _CHAIN_DIRECT.values():
             row[(chain_label, column)] = ''
         for column in _CHAIN_EXTRA.values():
@@ -371,26 +371,40 @@ class TestIedbReceptorAirrMapping(unittest.TestCase):
         self.assertEqual(frame['locus'].tolist(), ['TRA'])
         self.assertEqual(report['rows_out'], 1)
 
-    def test_curated_value_is_preferred_over_calculated(self):
+    def test_calculated_gene_is_preferred_over_curated(self):
+        row = blankReceptorRow()
+        row[('Receptor', 'IEDB Receptor ID')] = '1'
+        row[('Chain 1', 'Type')] = 'beta'
+        row[('Chain 1', 'Curated V Gene')] = 'TCRBV19-01'
+        row[('Chain 1', 'Calculated V Gene')] = 'TRBV19'
+        row[('Chain 1', 'Curated J Gene')] = 'TCRBJ02-07*01'
+        row[('Chain 1', 'Calculated J Gene')] = 'TRBJ2-7*01'
+
+        frame, _ = self._normalize([row], collection='tcr')
+
+        self.assertEqual(frame['v_call'].tolist(), ['TRBV19'])
+        self.assertEqual(frame['j_call'].tolist(), ['TRBJ2-7*01'])
+
+    def test_curated_gene_is_used_when_calculated_is_blank(self):
         row = blankReceptorRow()
         row[('Receptor', 'IEDB Receptor ID')] = '1'
         row[('Chain 1', 'Type')] = 'heavy'
         row[('Chain 1', 'Curated V Gene')] = 'IGHV1-2*02'
-        row[('Chain 1', 'Calculated V Gene')] = 'IGHV1-2*01'
 
         frame, _ = self._normalize([row])
 
         self.assertEqual(frame['v_call'].tolist(), ['IGHV1-2*02'])
 
-    def test_calculated_value_is_used_when_curated_is_blank(self):
+    def test_curated_cdr_is_preferred_over_calculated(self):
         row = blankReceptorRow()
         row[('Receptor', 'IEDB Receptor ID')] = '1'
         row[('Chain 1', 'Type')] = 'heavy'
-        row[('Chain 1', 'Calculated V Gene')] = 'IGHV1-2*01'
+        row[('Chain 1', 'CDR3 Curated')] = 'ARDYW'
+        row[('Chain 1', 'CDR3 Calculated')] = 'ARDY'
 
         frame, _ = self._normalize([row])
 
-        self.assertEqual(frame['v_call'].tolist(), ['IGHV1-2*01'])
+        self.assertEqual(frame['cdr3_aa'].tolist(), ['ARDYW'])
 
     def test_an_unresolvable_chain_type_leaves_locus_blank_but_keeps_the_row(self):
         row = blankReceptorRow()

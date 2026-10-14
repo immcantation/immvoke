@@ -98,14 +98,17 @@ _SHARED_COLUMNS = {
     ('Assay', 'MHC Allele Names'): 'assay_mhc_allele_names',
 }
 
-#: Per-chain fields IEDB records twice, once curated (expert reviewed) and
-#: once calculated (automated); the curated value is kept where present, the
-#: calculated one otherwise. Maps the AIRR field name to (curated column,
-#: calculated column).
+#: Per-chain fields IEDB records twice, once curated (as the authors reported
+#: it) and once calculated (IEDB's standardization pipeline); the preferred
+#: value is kept where present, the fallback one otherwise. Maps the AIRR
+#: field name to (preferred column, fallback column). Gene calls prefer the
+#: calculated value, which IEDB recommends for analysis: it is always valid
+#: IMGT nomenclature, while curated calls carry legacy names (`TCRBV19`) and
+#: family level ones (`IGHV3`) the gene gate cannot compare.
 _CHAIN_PREFERRED = {
-    'v_call': ('Curated V Gene', 'Calculated V Gene'),
-    'd_call': ('Curated D Gene', 'Calculated D Gene'),
-    'j_call': ('Curated J Gene', 'Calculated J Gene'),
+    'v_call': ('Calculated V Gene', 'Curated V Gene'),
+    'd_call': ('Calculated D Gene', 'Curated D Gene'),
+    'j_call': ('Calculated J Gene', 'Curated J Gene'),
     'cdr1_aa': ('CDR1 Curated', 'CDR1 Calculated'),
     'cdr1_start': ('CDR1 Start Curated', 'CDR1 Start Calculated'),
     'cdr1_end': ('CDR1 End Curated', 'CDR1 End Calculated'),
@@ -168,20 +171,20 @@ def _readReceptorCsv(path, chunksize):
                            na_filter=False)
 
 
-def _preferCurated(chain, curated, calculated):
+def _preferValue(chain, preferred, fallback):
     """
-    Pick a chain field's curated value, falling back to the calculated one.
+    Pick a chain field's preferred value, falling back to the other one.
 
     Arguments:
       chain (pandas.DataFrame): one chain's columns, bare field names.
-      curated (str): the curated column name.
-      calculated (str): the calculated column name.
+      preferred (str): the preferred column name.
+      fallback (str): the fallback column name.
 
     Returns:
-      pandas.Series: the curated value where present, the calculated one
+      pandas.Series: the preferred value where present, the fallback one
       elsewhere.
     """
-    return chain[curated].where(chain[curated] != '', chain[calculated])
+    return chain[preferred].where(chain[preferred] != '', chain[fallback])
 
 
 def _chainFrame(chunk, chain_label, chain_number, shared):
@@ -202,8 +205,8 @@ def _chainFrame(chunk, chain_label, chain_number, shared):
     chain = chunk[chain_label]
 
     frame = pandas.DataFrame(index=chunk.index)
-    for airr_field, (curated, calculated) in _CHAIN_PREFERRED.items():
-        frame[airr_field] = _preferCurated(chain, curated, calculated)
+    for airr_field, (preferred, fallback) in _CHAIN_PREFERRED.items():
+        frame[airr_field] = _preferValue(chain, preferred, fallback)
     for airr_field, column in _CHAIN_DIRECT.items():
         frame[airr_field] = chain[column]
     for name, column in _CHAIN_EXTRA.items():
