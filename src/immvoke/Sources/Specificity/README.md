@@ -101,26 +101,30 @@ immvoke annotate --query mine.tsv --reference databases/iedb/bcr.tsv \
 ### Output
 
 Each run writes three files into its `--outdir`, kept apart from the
-downloaded databases:
+downloaded databases, each named after the reference's database and table,
+`<db>_<table>_`:
 
 ```
 annotation/exact/
-├── annotation.tsv            # one row per query: its hits
-├── annotation_pairs.tsv      # one row per (query, reference) pair, scored
-└── annotation_metadata.yml   # the options, query, reference and its source
-                              # database, counts, version, time and command
+├── iedb_bcr_annotation.tsv            # one row per query: its hits
+├── iedb_bcr_annotation_pairs.tsv      # one row per (query, reference) pair, scored
+└── iedb_bcr_annotation_metadata.yml   # the options, query, reference and its
+                                       # database, counts, version, time and command
 ```
 
-`annotation_metadata.yml` names the reference's database (`source: iedb`)
-by reading the `download_metadata.yml` beside the reference table, so a run
-stays traceable to the database it was annotated against.
+The database is read off the `download_metadata.yml` that `immvoke
+specificity` writes beside the reference table, and the table off its file
+name, so runs against different databases can share one `--outdir` without
+overwriting each other. A reference without that record is named by its
+file name alone (`myref.tsv` gives `myref_annotation.tsv`), and a DataFrame
+passed from Python by `reference_`.
 
-`annotation.tsv`, without `--paired`, has one row per query heavy chain
-row, including rows with no hit:
+`<db>_<table>_annotation.tsv`, without `--paired`, has one row per query
+heavy chain row, including rows with no hit:
 
 | Column | Meaning |
 | --- | --- |
-| `query_row` | the query row's position among the heavy chain rows |
+| `sequence_id` | the query's own `sequence_id`, so the table joins straight back to the query file (`query_row`, its position among the heavy chain rows, for a query without that column) |
 | `n_hits_total` | how many reference rows matched |
 | `min_mismatches` | the closest hit's distance (edit distance under `levenshtein`) |
 | `is_unique_hit` | 0 or 1 hit |
@@ -131,19 +135,28 @@ With `--paired`, one row per query antibody (`cell_id`): `classification`
 (`both`, `heavy_only`, `light_only`, `conflicting` or `neither`),
 `heavy_hit_ids`, `light_hit_ids` and `both_hit_ids`.
 
-`annotation_pairs.tsv` lists the same hits one (query, reference) pair per
-row, closest first, each with its own score; a query with no hit has no
-row. Without `--paired`:
+`<db>_<table>_annotation_pairs.tsv` has one (query, reference) pair per
+row, each with its own score, by query and closest first:
+
+- an exact match (no `--identity-threshold`) lists its hits;
+- a Hamming or Levenshtein run lists **every pair through the filters you
+  chose** -- `--partition-by`'s gene gate (and CDR3 length under `VJL`), no
+  blank sequences, and under Hamming same-length pairs only -- whatever its
+  distance, with `within_threshold` marking the hits. Without
+  `--partition-by` that is every query against every reference: for one
+  repertoire against IEDB, millions of rows under Hamming and some 10^8
+  under Levenshtein, so `--partition-by VJ` keeps it to a manageable size.
 
 | Column | Meaning |
 | --- | --- |
-| `query_row` | as above, to join back to the result table |
-| `hit_id` | one matching reference `sequence_id` |
+| `sequence_id` | the query, as above |
+| `reference_id` | the reference `sequence_id` |
 | `mismatches` | this pair's distance (edit distance under `levenshtein`) |
 | `identity` | `1 - mismatches / query length` (an `X` counts as identical under `hamming`) |
+| `within_threshold` | Hamming/Levenshtein runs: whether the pair is a hit |
 | `mismatch_positions` | Hamming only: this pair's differing positions |
 
-With `--paired`: `cell_id`, `hit_id` (a reference `cell_id`) and
+With `--paired`, the hits: `cell_id`, `hit_id` (a reference `cell_id`) and
 `matched_chains` (`both`, `heavy` or `light`).
 
 IEDB lists a receptor once per epitope it was tested against: each record

@@ -24,9 +24,13 @@ Specificity:
   (``--paired``, one chain of each kind per cell picked by
   ``--count-field``).
 + ``immvoke annotate --outdir`` writes ``annotation.tsv`` (the hits per
-  query), ``annotation_pairs.tsv`` (one scored row per matched query and
-  reference pair) and ``annotation_metadata.yml`` (the options, inputs,
-  reference database and counts of the run).
+  query), ``annotation_pairs.tsv`` (one scored row per query and reference
+  pair: the hits of an exact match, or every pair through the chosen
+  filters of a Hamming or Levenshtein run, whatever its distance, with
+  ``within_threshold`` marking the hits) and ``annotation_metadata.yml``
+  (the options, inputs, reference database and counts of the run), each
+  named after the reference's database and table, e.g.
+  ``iedb_bcr_annotation.tsv``.
 
 .. _IEDB: https://www.iedb.org/
 .. _CoV-AbDab: https://opig.stats.ox.ac.uk/webapps/covabdab/

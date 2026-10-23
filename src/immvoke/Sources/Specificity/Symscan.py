@@ -10,7 +10,9 @@ symscan annotation: exact, Hamming and Levenshtein
 symscan (https://github.com/yutanagano/symscan) builds a Rust
 symmetric-deletion index and only ever looks at likely matches, rather than
 scoring every query x reference pair -- so it stays fast as the reference
-grows. It is the only matching engine: no pair is searched for in Python.
+grows. It is the only engine that finds hits: no hit is searched for in
+Python. (Distances.py scores every gated pair for a threshold run's pairs
+file; the hits still come from here.)
 
 Blanks. A row with a blank value in any compared column has nothing to
 compare, so it never matches: a blank query gets no hit, and a blank
@@ -168,14 +170,18 @@ def _without(seq, positions):
     return ''.join(c for i, c in enumerate(seq) if i not in positions)
 
 
-def _describeRows(rows, shown=5):
+def _describeRows(rows, queries, shown=5):
     """
     Returns:
-      str: the first few query row positions, for a log line.
+      str: the first few query rows, for a log line -- by their own
+      `sequence_id` where the query has one, else by position.
     """
-    listed = ', '.join(str(int(r)) for r in rows[:shown])
+    more = ', ...' if len(rows) > shown else ''
+    if DEFAULT_ID_COL in queries.columns:
+        ids = queries[DEFAULT_ID_COL].iloc[rows[:shown]].astype(str)
+        return '%s %s%s' % (DEFAULT_ID_COL, ', '.join(ids), more)
 
-    return 'query_row %s%s' % (listed, ', ...' if len(rows) > shown else '')
+    return 'query_row %s%s' % (', '.join(str(int(r)) for r in rows[:shown]), more)
 
 
 def _concat(parts):
@@ -299,7 +305,7 @@ def _symscanPairs(query_seqs, ref_seqs, limits, distance_type, query_rows,
 def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
                          distance_type='hamming', id_col=DEFAULT_ID_COL,
                          exact_cols=None, threshold_is_fraction=False, threads=1,
-                         gene_cols=None, return_pairs=False):
+                         gene_cols=None, return_pairs=False, warn_skipped=True):
     """
     Annotate each query row against `reference` allowing up to
     `max_distance` differences in `compare_cols`, via
@@ -333,6 +339,9 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
         (any allele), e.g. `['v_call', 'j_call']`; a blank or unrecognized
         call agrees with nothing (see Genes.py). None for no such gate.
       return_pairs (bool): also return the pairs behind `hit_ids`.
+      warn_skipped (bool): warn about the query rows beyond symscan's
+        limits; False for a caller that scores them some other way (see
+        Annotate._scoreSkippedRows).
 
     Returns:
       pandas.DataFrame: one row per query row, columns `query_row`,
@@ -342,9 +351,9 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
       `hit_ids` the hits' `id_col` values, closest first. Pairs beyond
       symscan's limits are skipped with a warning (see the module note);
       `attrs['skipped_query_rows']` counts the query rows that may
-      therefore miss hits.
+      therefore miss hits, and `attrs['skipped_rows']` lists them.
       With `return_pairs`, a tuple: that table, and one row per (query row,
-      hit id) in the same order -- `query_row`, `hit_id`, `mismatches`,
+      hit id) in the same order -- `query_row`, `reference_id`, `mismatches`,
       `identity` (1 - mismatches / the query's compared length, an X
       counting as identical under 'hamming'), plus `mismatch_positions`
       under 'hamming'.
@@ -425,13 +434,14 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
     if skipped:
         skipped_queries = numpy.unique(numpy.concatenate([q for q, _ in skipped]))
         skipped_refs = numpy.unique(numpy.concatenate([r for _, r in skipped]))
+    if skipped and warn_skipped:
         log.warning(
             '%d query rows could not be compared with %d reference rows, beyond '
             "symscan's limits (over %d differences, counting one per %r, or a "
             'sequence too long for its index at this threshold); those pairs '
             'were skipped, so these query rows may miss hits: %s',
             len(skipped_queries), len(skipped_refs), MAX_DISTANCE, WILDCARD,
-            _describeRows(skipped_queries))
+            _describeRows(skipped_queries, queries))
 
     # Gate symscan's pairs: exact columns always, per-column lengths when
     # several Hamming columns were pooled (the concatenated length alone
@@ -494,6 +504,7 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
     result['is_unique_hit'] = result['n_hits_total'] <= 1
     result = result[columns]
     result.attrs['skipped_query_rows'] = len(skipped_queries)
+    result.attrs['skipped_rows'] = [int(row) for row in skipped_queries]
     if not return_pairs:
         return result
 
@@ -502,7 +513,7 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
     query_rows = pairs['query_row'].to_numpy()
     lengths = numpy.array([len(seq) for seq in query_seqs], dtype=numpy.int64)
     pair_table = pandas.DataFrame({
-        'query_row': query_rows, 'hit_id': pairs['id'].to_numpy(),
+        'query_row': query_rows, 'reference_id': pairs['id'].to_numpy(),
         'mismatches': pairs['dist'].to_numpy(),
         'identity': 1 - pairs['dist'].to_numpy() / lengths[query_rows]})
     if hamming:

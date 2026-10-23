@@ -101,7 +101,7 @@ def addAnnotateParser(commands):
                              'residue matches any residue. Rows a threshold '
                              'makes too large for symscan (over 14 '
                              'differences, or a very long sequence) are '
-                             'skipped with a warning')
+                             'scored directly instead, more slowly')
     parser.add_argument('--distance-metric', dest='distance_metric',
                         choices=['hamming', 'levenshtein'], default='hamming',
                         help='hamming (substitutions only) or levenshtein '
@@ -113,11 +113,20 @@ def addAnnotateParser(commands):
                              'every core; only the first symscan run in a '
                              'process sets it)')
     parser.add_argument('--outdir', type=Path, required=True,
-                        help='folder to write into, created if needed: %s '
-                             '(the annotation table), %s (every matched '
-                             '(query, reference) pair with its score) and %s '
-                             '(the options, inputs and counts of this run)'
-                             % (ANNOTATION_FILE, PAIRS_FILE,
+                        help='folder to write into, created if needed, each '
+                             'file named after the reference\'s database and '
+                             'table (e.g. iedb_bcr_%s): <db>_<table>_%s (the '
+                             'annotation table), <db>_<table>_%s (one '
+                             '(query, reference) pair per row with its score: '
+                             'the hits of an exact match; with '
+                             '--identity-threshold, every pair through '
+                             '--partition-by\'s gate, whatever its distance, '
+                             'with within_threshold marking the hits) and '
+                             '<db>_<table>_%s (the options, inputs and '
+                             'counts of this run). A reference not downloaded '
+                             'by `immvoke specificity` is named by its file '
+                             'name alone'
+                             % (ANNOTATION_FILE, ANNOTATION_FILE, PAIRS_FILE,
                                 ANNOTATION_METADATA))
 
 

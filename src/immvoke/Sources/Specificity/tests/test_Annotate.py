@@ -30,6 +30,7 @@ from immvoke.Sources.Specificity.Annotate import (
     runPairedExactAnnotation,
 )
 from immvoke.Sources.Specificity.AnnotateCli import handleAnnotate
+from immvoke.Sources.Specificity.Symscan import runSymscanAnnotation
 from immvoke.Sources.Specificity.tests.BruteForce import bruteForceAnnotation
 
 ANNOTATE = 'immvoke.Sources.Specificity.Annotate'
@@ -158,11 +159,15 @@ def bruteForceSpecificity(queries, reference, sequence_region='CDR3H',
         exact_cols = ['cdr3_length']
     exact = identity_threshold is None or identity_threshold >= 1.0
 
-    return bruteForceAnnotation(
+    result = bruteForceAnnotation(
         queries, reference, REGION_COLUMNS[sequence_region],
         0 if exact else 1 - identity_threshold,
         distance_type='hamming' if exact else distance_metric, id_col='sequence_id',
         exact_cols=exact_cols, threshold_is_fraction=not exact, gene_cols=gene_cols)
+    # Each query named by its own sequence_id, as annotateSpecificity does.
+    result.insert(0, 'sequence_id', queries['sequence_id'].to_numpy()[result['query_row']])
+
+    return result.drop(columns='query_row')
 
 
 def heavy(sequence_id, cdr3_aa, v_call='IGHV1', j_call='IGHJ1', **extra):
@@ -189,8 +194,30 @@ class TestAnnotateSpecificity(unittest.TestCase):
         self.assertEqual(result['hit_ids'].tolist(), ['ref1', ''])
         self.assertEqual(result['n_hits_total'].tolist(), [1, 0])
         self.assertEqual(result.columns[:5].tolist(),
-                         ['query_row', 'n_hits_total', 'min_mismatches',
+                         ['sequence_id', 'n_hits_total', 'min_mismatches',
                           'is_unique_hit', 'hit_ids'])
+        self.assertEqual(result['sequence_id'].tolist(), ['q1', 'q2'])
+
+    def test_queries_are_named_by_their_sequence_id(self):
+        """By the query's own sequence_id -- not by position, which counts
+        heavy chain rows only -- or by position without that column."""
+        light = dict(sequence_id='q1-light', locus='IGK', cdr3_aa='CQQYNS',
+                     v_call='IGKV1', j_call='IGKJ1')
+        queries = [light, heavy('q2', 'CARDYW'), heavy('q3', 'CQQQQQ')]
+        with tempfile.TemporaryDirectory() as tmp:
+            result = annotateSpecificity(frame(queries), airr([heavy('ref1', 'CARDYW')]),
+                                         identity_threshold=0.8, outdir=tmp)
+
+            pairs = pandas.read_csv(Path(tmp) / ('reference_' + PAIRS_FILE), sep='\t')
+        self.assertEqual(result[['sequence_id', 'hit_ids']].values.tolist(),
+                         [['q2', 'ref1'], ['q3', '']])
+        self.assertEqual(pairs[['sequence_id', 'reference_id']].values.tolist(),
+                         [['q2', 'ref1'], ['q3', 'ref1']])
+
+        anonymous = frame([{'cdr3_aa': 'CARDYW'}, {'cdr3_aa': 'CQQQQQ'}])
+        result = annotateSpecificity(anonymous, airr([heavy('ref1', 'CARDYW')]))
+        self.assertEqual(result[['query_row', 'hit_ids']].values.tolist(),
+                         [[0, 'ref1'], [1, '']])
 
     def test_only_heavy_chain_rows_are_compared(self):
         light = dict(sequence_id='q2', locus='IGK', cdr3_aa='CQQYNS',
@@ -278,17 +305,36 @@ class TestAnnotateSpecificity(unittest.TestCase):
         self.assertEqual(self._hits([heavy('q1', 'CARXYW'), heavy('q2', 'CAKDYW')],
                                     [heavy('ref1', 'CARDYW')]), ['ref1', ''])
 
-    def test_a_threshold_beyond_symscan_is_skipped_with_a_warning(self):
+    def test_a_row_beyond_symscan_is_scored_directly(self):
         """20 residues at 0.25 identity -> 15 differences, above symscan's 14:
-        symscan is never called with it, and the row is reported."""
+        symscan is never called with it, and the row is scored directly
+        instead -- so its hit, 15 differences away, is still found."""
         with mock.patch('symscan.get_neighbors_across',
                         side_effect=AssertionError), \
-             self.assertLogs('immvoke.Sources.Specificity.Symscan', 'WARNING'):
+             self.assertLogs(ANNOTATE, 'INFO') as logs:
             hits = self._hits([heavy('q1', 'A' * 20)],
                               [heavy('ref1', 'B' * 15 + 'A' * 5)],
                               identity_threshold=0.25)
 
-        self.assertEqual(hits, [''])
+        self.assertEqual(hits, ['ref1'])
+        self.assertTrue(any('scoring their pairs directly' in line
+                            for line in logs.output))
+
+    def test_an_exact_row_beyond_symscan_keeps_its_hit_and_pair(self):
+        """15 X's are 15 differences of slack, beyond symscan; scored
+        directly, an X still matches any residue."""
+        query = frame([heavy('q1', 'X' * 15 + 'CA'), heavy('q2', 'CARDYW')])
+        reference = airr([heavy('ref1', 'ACDEFGHIKLMNPQRCA'), heavy('ref2', 'CARDYW')])
+        with tempfile.TemporaryDirectory() as tmp:
+            result = annotateSpecificity(query, reference, outdir=tmp)
+
+            pairs = pandas.read_csv(Path(tmp) / ('reference_' + PAIRS_FILE), sep='\t')
+            metadata = yaml.safe_load(Path(tmp, 'reference_' + ANNOTATION_METADATA)
+                                      .read_text())
+        self.assertEqual(result['hit_ids'].tolist(), ['ref1', 'ref2'])
+        self.assertEqual(pairs[['sequence_id', 'reference_id']].values.tolist(),
+                         [['q1', 'ref1'], ['q2', 'ref2']])
+        self.assertEqual(metadata['results']['query_rows_scored_directly'], 1)
 
     def test_paired_classifies_each_antibody(self):
         rows = [dict(cell_id='ab1', locus='IGH', cdr3_aa='CARDYW', v_call='IGHV1',
@@ -316,22 +362,24 @@ class TestAnnotateSpecificity(unittest.TestCase):
             result = annotateSpecificity(str(tmp / 'q.tsv'), tmp / 'r.tsv',
                                          partition_by='VJ', outdir=tmp / 'sub' / 'run')
 
+            # Not downloaded by `immvoke specificity`: named by its file name.
             run = tmp / 'sub' / 'run'
             self.assertEqual(sorted(p.name for p in run.iterdir()),
-                             [ANNOTATION_FILE, ANNOTATION_METADATA, PAIRS_FILE])
-            written = pandas.read_csv(run / ANNOTATION_FILE, sep='\t',
+                             ['r_' + ANNOTATION_FILE, 'r_' + ANNOTATION_METADATA,
+                              'r_' + PAIRS_FILE])
+            written = pandas.read_csv(run / ('r_' + ANNOTATION_FILE), sep='\t',
                                       keep_default_na=False)
             self.assertEqual(written['hit_ids'].tolist(), result['hit_ids'].tolist())
-            metadata = yaml.safe_load((run / ANNOTATION_METADATA).read_text())
+            metadata = yaml.safe_load((run / ('r_' + ANNOTATION_METADATA)).read_text())
         self.assertEqual(metadata['query'], {'path': str(tmp / 'q.tsv'), 'rows': 2})
         self.assertEqual(metadata['reference'], {'path': str(tmp / 'r.tsv'), 'rows': 1})
         self.assertEqual(metadata['options']['partition_by'], 'VJ')
         self.assertEqual(metadata['results'], {
             'query_rows_compared': 2, 'query_rows_with_hits': 1, 'pairs': 1,
-            'skipped_query_rows': 0})
+            'query_rows_scored_directly': 0})
         self.assertNotIn('command', metadata)  # called from Python, not the commandline
 
-    def test_metadata_names_the_reference_database(self):
+    def test_a_downloaded_reference_names_its_database_and_table(self):
         with tempfile.TemporaryDirectory() as tmp:
             database = Path(tmp) / 'databases' / 'iedb'
             database.mkdir(parents=True)
@@ -343,22 +391,38 @@ class TestAnnotateSpecificity(unittest.TestCase):
             annotateSpecificity(frame([heavy('q1', 'CARDYW')]), database / 'bcr.tsv',
                                 outdir=Path(tmp) / 'run')
 
-            metadata = yaml.safe_load((Path(tmp) / 'run' / ANNOTATION_METADATA).read_text())
+            run = Path(tmp) / 'run'
+            self.assertEqual(sorted(p.name for p in run.iterdir()),
+                             ['iedb_bcr_' + ANNOTATION_FILE,
+                              'iedb_bcr_' + ANNOTATION_METADATA,
+                              'iedb_bcr_' + PAIRS_FILE])
+            metadata = yaml.safe_load(Path(run, 'iedb_bcr_' + ANNOTATION_METADATA).read_text())
         self.assertEqual(metadata['query']['path'], None)
         self.assertEqual(metadata['reference']['source'], 'iedb')
         self.assertEqual(metadata['reference']['downloaded'], '2026-10-14T17:52:12Z')
 
-    def test_metadata_counts_the_skipped_rows(self):
-        with tempfile.TemporaryDirectory() as tmp, \
-             self.assertLogs('immvoke.Sources.Specificity.Symscan', 'WARNING'):
-            annotateSpecificity(frame([heavy('q1', 'A' * 20), heavy('q2', 'CARDYW')]),
-                                airr([heavy('ref1', 'CARDYW'),
-                                      heavy('ref2', 'B' * 15 + 'A' * 5)]),
-                                identity_threshold=0.25,
-                                outdir=tmp)
+    def test_metadata_counts_the_rows_scored_directly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = annotateSpecificity(
+                frame([heavy('q1', 'A' * 20), heavy('q2', 'CARDYW')]),
+                airr([heavy('ref1', 'CARDYW'), heavy('ref2', 'B' * 15 + 'A' * 5)]),
+                identity_threshold=0.25, outdir=tmp)
 
-            metadata = yaml.safe_load((Path(tmp) / ANNOTATION_METADATA).read_text())
-        self.assertEqual(metadata['results']['skipped_query_rows'], 1)
+            metadata = yaml.safe_load(Path(tmp, 'reference_' + ANNOTATION_METADATA)
+                                      .read_text())
+        self.assertEqual(metadata['results']['query_rows_scored_directly'], 1)
+        # Its summary agrees with its within_threshold pairs.
+        self.assertEqual(result[['sequence_id', 'hit_ids']].values.tolist(),
+                         [['q1', 'ref2'], ['q2', 'ref1']])
+        self.assertEqual(metadata['results']['pairs_within_threshold'], 2)
+
+    def test_symscan_names_skipped_rows_by_sequence_id(self):
+        with self.assertLogs('immvoke.Sources.Specificity.Symscan', 'WARNING') as logs:
+            runSymscanAnnotation(frame([heavy('q1', 'A' * 20)]),
+                                 airr([heavy('ref1', 'B' * 15 + 'A' * 5)]),
+                                 ['cdr3_aa'], 0.75, threshold_is_fraction=True)
+
+        self.assertIn('may miss hits: sequence_id q1', logs.output[0])
 
     def test_metadata_takes_numpy_options(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -366,7 +430,7 @@ class TestAnnotateSpecificity(unittest.TestCase):
                                 airr([heavy('ref1', 'CARDYW')]),
                                 identity_threshold=numpy.float64(0.9), outdir=tmp)
 
-            metadata = yaml.safe_load((Path(tmp) / ANNOTATION_METADATA).read_text())
+            metadata = yaml.safe_load(Path(tmp, 'reference_' + ANNOTATION_METADATA).read_text())
         self.assertEqual(metadata['options']['identity_threshold'], 0.9)
 
     def test_a_run_without_hits_fills_text_columns_cleanly(self):
@@ -381,20 +445,43 @@ class TestAnnotateSpecificity(unittest.TestCase):
         self.assertEqual(result[['hit_ids', 'mismatch_positions']].values.tolist(),
                          [['', '']])
 
-    def test_pairs_are_written_one_row_per_hit(self):
-        queries = [heavy('q1', 'CARDYW'), heavy('q2', 'CQQQQQ'), heavy('q3', 'CARDYY')]
+    def test_threshold_runs_score_every_gated_pair(self):
+        """Below an exact match the pairs file holds every pair through the
+        gates, whatever its distance; within_threshold marks the hits."""
+        queries = [heavy('q1', 'CARDYW'), heavy('q2', 'CQQQQQ'), heavy('q3', 'CARDYY'),
+                   heavy('q4', 'CARDYW', v_call='IGHV3')]
         reference = [heavy('ref1', 'CARDYW'), heavy('ref2', 'CARDYY')]
         with tempfile.TemporaryDirectory() as tmp:
             result = annotateSpecificity(frame(queries), airr(reference),
-                                         identity_threshold=0.8, outdir=tmp)
+                                         identity_threshold=0.8, partition_by='V',
+                                         outdir=tmp)
 
-            pairs = pandas.read_csv(Path(tmp) / PAIRS_FILE, sep='\t',
+            pairs = pandas.read_csv(Path(tmp) / ('reference_' + PAIRS_FILE), sep='\t',
                                     keep_default_na=False)
-        self.assertEqual(result['hit_ids'].tolist(), ['ref1;ref2', '', 'ref2;ref1'])
-        self.assertEqual(pairs[['query_row', 'hit_id', 'mismatches']].values.tolist(),
-                         [[0, 'ref1', 0], [0, 'ref2', 1], [2, 'ref2', 0], [2, 'ref1', 1]])
-        self.assertEqual(pairs['identity'].round(4).tolist(),
-                         [1.0, 0.8333, 1.0, 0.8333])
+            metadata = yaml.safe_load(Path(tmp, 'reference_' + ANNOTATION_METADATA)
+                                      .read_text())
+        self.assertEqual(result['hit_ids'].tolist(), ['ref1;ref2', '', 'ref2;ref1', ''])
+        # q4's V-gene matches no reference, so it has no pair at all.
+        self.assertEqual(pairs[['sequence_id', 'reference_id', 'mismatches',
+                                'within_threshold']].values.tolist(),
+                         [['q1', 'ref1', 0, True], ['q1', 'ref2', 1, True],
+                          ['q2', 'ref1', 5, False], ['q2', 'ref2', 5, False],
+                          ['q3', 'ref2', 0, True], ['q3', 'ref1', 1, True]])
+        self.assertEqual(pairs['identity'].tolist(),
+                         [1.0, 0.8333, 0.1667, 0.1667, 1.0, 0.8333])
+        self.assertEqual((metadata['results']['pairs'],
+                          metadata['results']['pairs_within_threshold']), (6, 4))
+
+    def test_exact_runs_write_the_hits_only(self):
+        queries = [heavy('q1', 'CARDYW'), heavy('q2', 'CQQQQQ')]
+        with tempfile.TemporaryDirectory() as tmp:
+            annotateSpecificity(frame(queries), airr([heavy('ref1', 'CARDYW')]),
+                                outdir=tmp)
+
+            pairs = pandas.read_csv(Path(tmp) / ('reference_' + PAIRS_FILE), sep='\t')
+        self.assertEqual(pairs[['sequence_id', 'reference_id', 'mismatches']]
+                         .values.tolist(), [['q1', 'ref1', 0]])
+        self.assertNotIn('within_threshold', pairs.columns)
 
     def test_paired_pairs_name_the_matched_chains(self):
         def antibody(cell_id, heavy_cdr3, light_cdr3):
@@ -409,8 +496,8 @@ class TestAnnotateSpecificity(unittest.TestCase):
             annotateSpecificity(frame(queries), airr(reference), paired=True,
                                 outdir=tmp)
 
-            pairs = pandas.read_csv(Path(tmp) / PAIRS_FILE, sep='\t')
-            metadata = yaml.safe_load((Path(tmp) / ANNOTATION_METADATA).read_text())
+            pairs = pandas.read_csv(Path(tmp) / ('reference_' + PAIRS_FILE), sep='\t')
+            metadata = yaml.safe_load(Path(tmp, 'reference_' + ANNOTATION_METADATA).read_text())
         self.assertEqual(pairs.values.tolist(), [['ab1', 'refA', 'both'],
                                                  ['ab1', 'refB', 'heavy']])
         self.assertEqual(metadata['results'], {
@@ -722,8 +809,8 @@ class TestAnnotateCli(unittest.TestCase):
             with mock.patch('sys.argv', ['/venv/bin/immvoke'] + argv):
                 self.assertEqual(handleAnnotate(args), 0)
 
-            written = pandas.read_csv(tmp / 'run' / ANNOTATION_FILE, sep='\t',
+            written = pandas.read_csv(tmp / 'run' / ('r_' + ANNOTATION_FILE), sep='\t',
                                       keep_default_na=False)
-            metadata = yaml.safe_load((tmp / 'run' / ANNOTATION_METADATA).read_text())
+            metadata = yaml.safe_load(Path(tmp, 'run', 'r_' + ANNOTATION_METADATA).read_text())
         self.assertEqual(written['hit_ids'].tolist(), ['ref1', ''])
         self.assertEqual(metadata['command'], ' '.join(['immvoke'] + argv))

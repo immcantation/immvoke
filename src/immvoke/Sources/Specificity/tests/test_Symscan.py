@@ -51,9 +51,9 @@ class TestRunSymscanAnnotation(unittest.TestCase):
                                              id_col='id', return_pairs=True)
 
         self.assertEqual(result['hit_ids'].tolist(), ['r2;r1', '', 'r2;r1'])
-        self.assertEqual(pairs.columns.tolist(), ['query_row', 'hit_id', 'mismatches',
+        self.assertEqual(pairs.columns.tolist(), ['query_row', 'reference_id', 'mismatches',
                                                   'identity', 'mismatch_positions'])
-        self.assertEqual(pairs[['query_row', 'hit_id', 'mismatches']].values.tolist(),
+        self.assertEqual(pairs[['query_row', 'reference_id', 'mismatches']].values.tolist(),
                          [[0, 'r2', 0], [0, 'r1', 1], [2, 'r2', 0], [2, 'r1', 1]])
         self.assertEqual(pairs['identity'].tolist(), [1.0, 5 / 6, 1.0, 5 / 6])
         self.assertEqual(pairs['mismatch_positions'].tolist(), ['', '3', '', '3'])
@@ -66,7 +66,7 @@ class TestRunSymscanAnnotation(unittest.TestCase):
 
         self.assertEqual(len(pairs), 0)
         self.assertEqual(pairs.columns.tolist(),
-                         ['query_row', 'hit_id', 'mismatches', 'identity'])
+                         ['query_row', 'reference_id', 'mismatches', 'identity'])
 
     def test_hamming_over_budget_does_not_hit(self):
         queries = frame([{'cdr3': 'CARDYW'}])
@@ -325,6 +325,35 @@ class TestSymscanExactMatch(unittest.TestCase):
         self.assertEqual(result['hit_ids'].tolist(), [''])
 
 
+def randomTables(seed):
+    """
+    Seeded random query and reference tables built to hit the edge cases (X
+    residues, blanks, duplicate ids, gene calls that agree or not); also
+    used by test_Distances.
+    """
+    rng = random.Random(seed)
+
+    def residues(n):
+        value = ''.join(rng.choice('ACD') for _ in range(n))
+        if value and rng.random() < 0.2:  # at most one X per column
+            pos = rng.randrange(len(value))
+            value = value[:pos] + 'X' + value[pos + 1:]
+        return value
+
+    def row(i=None):
+        values = {'cdr1': residues(rng.randint(0, 3)),
+                  'cdr3': residues(rng.randint(3, 6)),
+                  'v_call': rng.choice(['IGHV1-2*01', 'IGHV1-2*02', 'IGHV3-23*01',
+                                        '']),
+                  'j_call': rng.choice(['IGHJ4*02', 'IGHJ6*01'])}
+        if i is not None:
+            values['id'] = 'r%d' % (i % 50)  # some ids span several rows
+        return values
+
+    return (frame([row() for _ in range(40)]),
+            frame([row(i) for i in range(70)]))
+
+
 class TestSymscanMatchesBruteForce(unittest.TestCase):
     """
     runSymscanAnnotation must return exactly the result and pairs tables a
@@ -332,29 +361,6 @@ class TestSymscanMatchesBruteForce(unittest.TestCase):
     random tables built to hit the edge cases (X residues, blanks, duplicate
     ids, exact and gene gates, pooled columns, fraction thresholds).
     """
-
-    def _tables(self, seed):
-        rng = random.Random(seed)
-
-        def residues(n):
-            value = ''.join(rng.choice('ACD') for _ in range(n))
-            if value and rng.random() < 0.2:  # at most one X per column
-                pos = rng.randrange(len(value))
-                value = value[:pos] + 'X' + value[pos + 1:]
-            return value
-
-        def row(i=None):
-            values = {'cdr1': residues(rng.randint(0, 3)),
-                      'cdr3': residues(rng.randint(3, 6)),
-                      'v_call': rng.choice(['IGHV1-2*01', 'IGHV1-2*02', 'IGHV3-23*01',
-                                            '']),
-                      'j_call': rng.choice(['IGHJ4*02', 'IGHJ6*01'])}
-            if i is not None:
-                values['id'] = 'r%d' % (i % 50)  # some ids span several rows
-            return values
-
-        return (frame([row() for _ in range(40)]),
-                frame([row(i) for i in range(70)]))
 
     def _check(self, queries, reference, *args, **kwargs):
         expected, expected_pairs = bruteForceAnnotation(
@@ -372,14 +378,14 @@ class TestSymscanMatchesBruteForce(unittest.TestCase):
                                    'gene_cols': ['v_call', 'j_call']}),
                  (['cdr1', 'cdr3'], 0.25, {'threshold_is_fraction': True})]
         for seed in range(5):
-            queries, reference = self._tables(seed)
+            queries, reference = randomTables(seed)
             for cols, tolerance, kwargs in cases:
                 with self.subTest(seed=seed, cols=cols, tolerance=tolerance, **kwargs):
                     self._check(queries, reference, cols, tolerance, **kwargs)
 
     def test_levenshtein(self):
         for seed in range(5):
-            queries, reference = self._tables(seed)
+            queries, reference = randomTables(seed)
             for max_edits, kwargs in ((1, {}), (2, {'gene_cols': ['v_call', 'j_call']})):
                 with self.subTest(seed=seed, max_edits=max_edits):
                     self._check(queries, reference, ['cdr3'], max_edits,
@@ -388,7 +394,7 @@ class TestSymscanMatchesBruteForce(unittest.TestCase):
     def test_chunked_queries_give_the_same_result(self):
         """A budget small enough to split every group's queries over many
         symscan calls, yet still fitting each single query."""
-        queries, reference = self._tables(0)
+        queries, reference = randomTables(0)
         with mock.patch.object(Symscan, 'MAX_VARIANTS', 2000):
             self._check(queries, reference, ['cdr3'], 1)
 

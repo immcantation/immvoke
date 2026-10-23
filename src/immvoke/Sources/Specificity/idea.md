@@ -21,24 +21,36 @@ always run; the others are set with the option shown (the
 | 5 | Gene gate | `--partition-by` | none, `V`, `VJ`, `VJL` | none |
 | 6 | How close is a hit | `--identity-threshold` | a fraction in (0, 1] | exact |
 | 7 | Distance | `--distance-metric` | `hamming`, `levenshtein` | `hamming` |
-| 8 | Search | *automatic* | symscan; rows too large for it are skipped, with a warning, and counted in `annotation_metadata.yml` | -- |
-| 9 | Output | `--outdir` (`outdir` in Python) | `annotation.tsv` (also returned as a DataFrame), `annotation_pairs.tsv` (one scored (query, reference) pair per row) and `annotation_metadata.yml` | -- |
+| 8 | Search | *automatic* | symscan; rows too large for it are scored directly instead, and counted in `annotation_metadata.yml` | -- |
+| 9 | Output | `--outdir` (`outdir` in Python) | `annotation.tsv` (also returned as a DataFrame), `annotation_pairs.tsv` (one scored (query, reference) pair per row) and `annotation_metadata.yml`, each prefixed with the reference's database and table (`iedb_bcr_annotation.tsv`) | -- |
 
 With `--paired` on, steps 3-7 are replaced by one fixed comparison: an
 antibody (`cell_id`) matches a reference antibody only if both its heavy and
 its light chain have the same V gene, the same J gene and an exact CDR3 --
 classified `both`, `heavy_only`, `light_only`, `conflicting` or `neither`.
 Without it, every query heavy chain row gets one result row, 0 hits if
-unmatched (`n_hits_total`, `hit_ids`, ...). `annotation_pairs.tsv` unfolds
-those hits into one row per (query, reference) pair with that pair's own
-`mismatches` and `identity`, where the result table keeps only the closest
-hit's distance. It lists matched pairs only, not every query against every
-reference: symscan never scores a pair beyond the threshold.
+unmatched (`n_hits_total`, `hit_ids`, ...). `annotation_pairs.tsv` has one
+row per (query, reference) pair with that pair's own `mismatches` and
+`identity`, where the result table keeps only the closest hit's distance.
+An exact match lists its hits. Below an exact match (Hamming or
+Levenshtein) it lists **every pair through the gates you chose**, whatever
+its distance, with `within_threshold` marking the hits: the gene gate
+(`--partition-by`), CDR3 length under `VJL`, no blanks -- and, under
+Hamming, only same-length pairs, the only ones Hamming distance is defined
+for. Without `--partition-by` that is every query against every reference
+(for one repertoire against IEDB, millions of rows under Hamming and some
+10^8 under Levenshtein).
+
+The output files are named after the reference, `<db>_<table>_` -- the
+database read off the `download_metadata.yml` `immvoke specificity` writes
+beside the reference table, the table off its file name -- so runs against
+different databases stay apart, even in one `--outdir`. A reference without
+that record is named by its file name alone.
 
 `annotation_metadata.yml` records the run: the options, the query and
 reference (with the reference's source database, read from the
-`download_metadata.yml` beside it), the counts -- skipped rows included --
-and the immvoke version, time and command.
+`download_metadata.yml` beside it), the counts -- rows scored directly
+included -- and the immvoke version, time and command.
 
 ## Input contract
 
@@ -129,10 +141,18 @@ no count column) keeps them all.
 
 ## Engine
 
-- **symscan is the only engine.** It is a required dependency, a
+- **symscan finds the hits.** It is a required dependency, a
   symmetric-deletion index that only looks at likely matches instead of
   scoring every query x reference pair. There is no install check and no
   pure-Python matcher.
+- **Every gated pair through numpy.** symscan never scores a pair beyond
+  the threshold, so the pairs file of a Hamming or Levenshtein run is
+  scored separately (`Distances.py`): references are indexed by gene and
+  gate key so each query only meets the pairs its gates allow, then a
+  block of pairs is compared position by position (Hamming, `X` never
+  counting) or through an edit distance table filled for the whole block
+  at once (Levenshtein). Queries go in blocks, so the file is written as it
+  goes, and its `within_threshold` pairs are exactly symscan's hits.
 - **`X` through symscan.** symscan has no wildcard and compares `X` as a
   letter, so the `X`s are taken out of the comparison instead: reference
   rows are grouped by where their `X`s sit, and those positions are cut out
@@ -140,19 +160,22 @@ no count column) keeps them all.
   query's own `X`s (rarer) are covered by slack -- one extra difference
   each -- and every pair involving an `X` is re-scored with the wildcard
   rule, keeping only those within the real threshold.
-- **Rows beyond symscan's limits are skipped.** symscan aborts the process
-  above 14 differences, or once its index -- every deletion variant of
-  every sequence, which grows steeply with length and tolerance -- outgrows
-  memory. Both the queries and the references are chunked to a fixed
-  budget, so table size alone never matters; what cannot fit at all (a
-  threshold allowing over 14 differences, `X` slack included, or one
-  sequence too long to index at that threshold) is left out of the
-  comparison, with a warning naming the query rows that may therefore miss
-  hits, and their count in `annotation_metadata.yml`. On today's IEDB table
-  that is a handful of outliers, such as reference "CDR3s" of 60+ residues
-  at a loose threshold. A VDJ comparison (~110-130 residues) fits up to 4
-  differences: exact matching and thresholds of about 0.97 and up; below
-  that most VDJ rows are skipped.
+- **Rows beyond symscan's limits are scored directly.** symscan aborts the
+  process above 14 differences, or once its index -- every deletion variant
+  of every sequence, which grows steeply with length and tolerance --
+  outgrows memory. Both the queries and the references are chunked to a
+  fixed budget, so table size alone never matters; what cannot fit at all
+  (a threshold allowing over 14 differences, `X` slack included, or one
+  sequence too long to index at that threshold) is kept away from symscan,
+  and those query rows' pairs are scored directly instead (`Distances.py`),
+  so no row misses a hit; their count is in `annotation_metadata.yml`. On
+  today's IEDB table that is a handful of outliers, such as reference
+  "CDR3s" of 60+ residues at a loose threshold. A VDJ comparison (~110-130
+  residues) fits symscan up to 4 differences -- exact matching and
+  thresholds of about 0.97 and up; below that most VDJ rows are scored
+  directly, which is correct but slower, so `--partition-by` matters there.
+  (Under `--paired`, which is always exact, only a query with over 14 `X`s
+  goes beyond symscan; such a row is skipped, with a warning.)
 - **Order of steps.** symscan measures distance first; the exact-column and
   gene checks are applied to the pairs it returns.
 
@@ -165,4 +188,5 @@ no count column) keeps them all.
   are refused).
 - No substitution-matrix (BLOSUM) scoring.
 - Fuzzy VDJ matching below a threshold of about 0.97 is out of symscan's
-  reach, so those rows are skipped.
+  reach; those rows are scored directly, which is slow without
+  `--partition-by`.
