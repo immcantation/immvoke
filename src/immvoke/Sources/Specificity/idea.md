@@ -21,14 +21,18 @@ always run; the others are set with the option shown (the
 | 6 | How close is a hit | `--identity-threshold` | a fraction in (0, 1] | exact |
 | 7 | Distance | `--distance-metric` | `hamming`, `levenshtein` | `hamming` |
 | 8 | Search | *automatic* | symscan; rows too large for it are skipped, with a warning | -- |
-| 9 | Output | `-o` (`output` in Python) | TSV, and the DataFrame returned | -- |
+| 9 | Output | `--outdir` (`outdir` in Python) | `annotation.tsv` (also returned as a DataFrame), `annotation_pairs.tsv` (one scored (query, reference) pair per row) and `annotation_metadata.yml` | -- |
 
 With `--paired` on, steps 3-7 are replaced by one fixed comparison: an
 antibody (`cell_id`) matches a reference antibody only if both its heavy and
 its light chain have the same V gene, the same J gene and an exact CDR3 --
 classified `both`, `heavy_only`, `light_only`, `conflicting` or `neither`.
 Without it, every query heavy chain row gets one result row, 0 hits if
-unmatched (`n_hits_total`, `hit_ids`, ...).
+unmatched (`n_hits_total`, `hit_ids`, ...). `annotation_pairs.tsv`
+unfolds those hits into one row per (query, reference) pair with that pair's own
+`mismatches` and `identity`, where the result table keeps only the closest
+hit's distance. It lists matched pairs only, not every query against every
+reference: symscan never scores a pair beyond the threshold.
 
 ## Input contract
 
@@ -105,6 +109,16 @@ rows sharing one `cell_id`. It matches a reference antibody only if that
 exact CDR3 on both chains; a heavy hit on one reference antibody and a light
 hit on another is `conflicting`, not `both`. Region, partition, threshold
 and metric do not apply.
+
+A query cell can carry more than one heavy chain, or more than one light
+chain (a doublet, ambient RNA, or a second light chain). Before matching,
+each query cell keeps one heavy (`IGH`) and one light (`IGK` or `IGL`)
+chain: the one with the highest `--count-field` value (`duplicate_count` by
+default, or e.g. `umi_count`). On a tie, a blank count, or a file without
+that column, the chain that comes first in the file is kept. The reference
+is not reduced this way: a reference antibody with several chains of one
+kind (4 heavy and 26 light cases among IEDB's human antibodies, which carry
+no count column) keeps them all.
 
 ## Engine
 

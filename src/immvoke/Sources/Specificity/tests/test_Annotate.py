@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 import pandas
+import yaml
 from airr.schema import RearrangementSchema
 
 # Immvoke imports
@@ -20,6 +21,9 @@ from immvoke.Cli import getArgParser
 from immvoke.Convert import writeAirr
 from immvoke.Exceptions import AnnotationError
 from immvoke.Sources.Specificity.Annotate import (
+    ANNOTATION_FILE,
+    ANNOTATION_METADATA,
+    PAIRS_FILE,
     annotateSpecificity,
     runPairedExactAnnotation,
 )
@@ -299,18 +303,96 @@ class TestAnnotateSpecificity(unittest.TestCase):
             annotateSpecificity(frame(rows), airr(reference), paired=True,
                                 identity_threshold=0.9)
 
-    def test_reads_paths_and_writes_the_returned_table(self):
+    def test_reads_paths_and_writes_the_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            frame([heavy('q1', 'CARDYW')]).to_csv(tmp / 'q.tsv', sep='\t', index=False)
+            frame([heavy('q1', 'CARDYW'), heavy('q2', 'CQQQQQ')]).to_csv(
+                tmp / 'q.tsv', sep='\t', index=False)
             airr([heavy('ref1', 'CARDYW')]).to_csv(tmp / 'r.tsv', sep='\t',
                                                     index=False)
 
             result = annotateSpecificity(str(tmp / 'q.tsv'), tmp / 'r.tsv',
-                                         output=tmp / 'sub' / 'out.tsv')
+                                         partition_by='VJ', outdir=tmp / 'sub' / 'run')
 
-            written = pandas.read_csv(tmp / 'sub' / 'out.tsv', sep='\t')
+            run = tmp / 'sub' / 'run'
+            self.assertEqual(sorted(p.name for p in run.iterdir()),
+                             [ANNOTATION_FILE, ANNOTATION_METADATA, PAIRS_FILE])
+            written = pandas.read_csv(run / ANNOTATION_FILE, sep='\t',
+                                      keep_default_na=False)
             self.assertEqual(written['hit_ids'].tolist(), result['hit_ids'].tolist())
+            metadata = yaml.safe_load((run / ANNOTATION_METADATA).read_text())
+        self.assertEqual(metadata['query'], {'path': str(tmp / 'q.tsv'), 'rows': 2})
+        self.assertEqual(metadata['reference'], {'path': str(tmp / 'r.tsv'), 'rows': 1})
+        self.assertEqual(metadata['options']['partition_by'], 'VJ')
+        self.assertEqual(metadata['results'], {
+            'query_rows_compared': 2, 'query_rows_with_hits': 1, 'pairs': 1,
+            'skipped_query_rows': 0})
+        self.assertNotIn('command', metadata)  # called from Python, not the commandline
+
+    def test_metadata_names_the_reference_database(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            database = Path(tmp) / 'databases' / 'iedb'
+            database.mkdir(parents=True)
+            airr([heavy('ref1', 'CARDYW')]).to_csv(database / 'bcr.tsv', sep='\t',
+                                                    index=False)
+            (database / 'download_metadata.yml').write_text(yaml.safe_dump(
+                {'source': 'iedb', 'runs': [{'finished': '2026-10-14T17:52:12Z'}]}))
+
+            annotateSpecificity(frame([heavy('q1', 'CARDYW')]), database / 'bcr.tsv',
+                                outdir=Path(tmp) / 'run')
+
+            metadata = yaml.safe_load((Path(tmp) / 'run' / ANNOTATION_METADATA).read_text())
+        self.assertEqual(metadata['query']['path'], None)
+        self.assertEqual(metadata['reference']['source'], 'iedb')
+        self.assertEqual(metadata['reference']['downloaded'], '2026-10-14T17:52:12Z')
+
+    def test_metadata_counts_the_skipped_rows(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             self.assertLogs('immvoke.Sources.Specificity.Symscan', 'WARNING'):
+            annotateSpecificity(frame([heavy('q1', 'A' * 20), heavy('q2', 'CARDYW')]),
+                                airr([heavy('ref1', 'CARDYW'),
+                                      heavy('ref2', 'B' * 15 + 'A' * 5)]),
+                                identity_threshold=0.25,
+                                outdir=tmp)
+
+            metadata = yaml.safe_load((Path(tmp) / ANNOTATION_METADATA).read_text())
+        self.assertEqual(metadata['results']['skipped_query_rows'], 1)
+
+    def test_pairs_are_written_one_row_per_hit(self):
+        queries = [heavy('q1', 'CARDYW'), heavy('q2', 'CQQQQQ'), heavy('q3', 'CARDYY')]
+        reference = [heavy('ref1', 'CARDYW'), heavy('ref2', 'CARDYY')]
+        with tempfile.TemporaryDirectory() as tmp:
+            result = annotateSpecificity(frame(queries), airr(reference),
+                                         identity_threshold=0.8, outdir=tmp)
+
+            pairs = pandas.read_csv(Path(tmp) / PAIRS_FILE, sep='\t',
+                                    keep_default_na=False)
+        self.assertEqual(result['hit_ids'].tolist(), ['ref1;ref2', '', 'ref2;ref1'])
+        self.assertEqual(pairs[['query_row', 'hit_id', 'mismatches']].values.tolist(),
+                         [[0, 'ref1', 0], [0, 'ref2', 1], [2, 'ref2', 0], [2, 'ref1', 1]])
+        self.assertEqual(pairs['identity'].round(4).tolist(),
+                         [1.0, 0.8333, 1.0, 0.8333])
+
+    def test_paired_pairs_name_the_matched_chains(self):
+        def antibody(cell_id, heavy_cdr3, light_cdr3):
+            return [dict(cell_id=cell_id, locus='IGH', cdr3_aa=heavy_cdr3,
+                         v_call='IGHV1', j_call='IGHJ1'),
+                    dict(cell_id=cell_id, locus='IGK', cdr3_aa=light_cdr3,
+                         v_call='IGKV1', j_call='IGKJ1')]
+        queries = antibody('ab1', 'CARDYW', 'CQQYNS') + antibody('ab2', 'CAKKKK', 'CQQAAA')
+        reference = antibody('refA', 'CARDYW', 'CQQYNS') + antibody('refB', 'CARDYW',
+                                                                    'CQQTTT')
+        with tempfile.TemporaryDirectory() as tmp:
+            annotateSpecificity(frame(queries), airr(reference), paired=True,
+                                outdir=tmp)
+
+            pairs = pandas.read_csv(Path(tmp) / PAIRS_FILE, sep='\t')
+            metadata = yaml.safe_load((Path(tmp) / ANNOTATION_METADATA).read_text())
+        self.assertEqual(pairs.values.tolist(), [['ab1', 'refA', 'both'],
+                                                 ['ab1', 'refB', 'heavy']])
+        self.assertEqual(metadata['results'], {
+            'query_antibodies': 2, 'classification': {'both': 1, 'neither': 1},
+            'pairs': 2, 'skipped_query_rows': 0})
 
     def test_genes_match_by_name_any_allele(self):
         queries = [heavy('q1', 'CARDYW', v_call='IGHV1-2*02', j_call='IGHJ4*02')]
@@ -348,6 +430,58 @@ class TestAnnotateSpecificity(unittest.TestCase):
                 pandas.testing.assert_frame_equal(
                     result, bruteForceSpecificity(queries, reference, **kwargs),
                     check_dtype=False)
+
+    def _pairedCell(self, heavies, lights=None, **kwargs):
+        """
+        Classify one query cell `ab1` against reference antibody `refA`
+        (heavy CDR3 CARDYW, light CDR3 CQQYNS). `heavies`/`lights` are
+        (cdr3_aa, extra fields) per query chain.
+        """
+        def chain(locus, cdr3, v, j, extra):
+            return dict(cell_id='ab1', locus=locus, cdr3_aa=cdr3, v_call=v,
+                        j_call=j, **extra)
+        lights = lights if lights is not None else [('CQQYNS', {})]
+        queries = ([chain('IGH', c, 'IGHV1-2*02', 'IGHJ4*02', e) for c, e in heavies]
+                   + [chain('IGK', c, 'IGKV1-39*01', 'IGKJ1*01', e) for c, e in lights])
+        reference = [chain('IGH', 'CARDYW', 'IGHV1-2*02', 'IGHJ4*02', {}),
+                     chain('IGK', 'CQQYNS', 'IGKV1-39*01', 'IGKJ1*01', {})]
+        reference = [dict(row, cell_id='refA') for row in reference]
+
+        result = annotateSpecificity(frame(queries), airr(reference), paired=True,
+                                     **kwargs)
+        return result['classification'].tolist()
+
+    def test_several_heavy_chains_keep_the_most_abundant(self):
+        self.assertEqual(self._pairedCell([('CAKQQQ', {'duplicate_count': '5'}),
+                                           ('CARDYW', {'duplicate_count': '50'})]),
+                         ['both'])
+        self.assertEqual(self._pairedCell([('CAKQQQ', {'duplicate_count': '50'}),
+                                           ('CARDYW', {'duplicate_count': '5'})]),
+                         ['light_only'])
+
+    def test_several_light_chains_keep_the_most_abundant(self):
+        heavy = [('CARDYW', {'duplicate_count': '9'})]
+        self.assertEqual(self._pairedCell(heavy, [('CQQAAA', {'duplicate_count': '3'}),
+                                                  ('CQQYNS', {'duplicate_count': '7'})]),
+                         ['both'])
+        self.assertEqual(self._pairedCell(heavy, [('CQQAAA', {'duplicate_count': '7'}),
+                                                  ('CQQYNS', {'duplicate_count': '3'})]),
+                         ['heavy_only'])
+
+    def test_ties_and_missing_counts_keep_the_first_row(self):
+        tie = [('CAKQQQ', {'duplicate_count': '5'}), ('CARDYW', {'duplicate_count': '5'})]
+        no_column = [('CAKQQQ', {}), ('CARDYW', {})]
+        blank = [('CARDYW', {'duplicate_count': ''}), ('CAKQQQ', {'duplicate_count': '1'})]
+        self.assertEqual(self._pairedCell(tie), ['light_only'])
+        self.assertEqual(self._pairedCell(no_column), ['light_only'])
+        # A blank count ranks below any number.
+        self.assertEqual(self._pairedCell(blank), ['light_only'])
+
+    def test_the_count_field_can_be_named(self):
+        heavies = [('CAKQQQ', {'duplicate_count': '50', 'umi_count': '1'}),
+                   ('CARDYW', {'duplicate_count': '5', 'umi_count': '9'})]
+        self.assertEqual(self._pairedCell(heavies), ['light_only'])
+        self.assertEqual(self._pairedCell(heavies, count_field='umi_count'), ['both'])
 
     def test_paired_compares_genes_by_name(self):
         rows = [dict(cell_id='ab1', locus='IGH', cdr3_aa='CARDYW', v_call='IGHV1-2*02',
@@ -480,7 +614,7 @@ class TestAnnotateCli(unittest.TestCase):
     Tests for `immvoke annotate`, a thin wrapper over annotateSpecificity
     """
 
-    BASE = ['annotate', '--query', 'q.tsv', '--reference', 'r.tsv', '-o', 'o.tsv']
+    BASE = ['annotate', '--query', 'q.tsv', '--reference', 'r.tsv', '--outdir', 'run']
 
     def test_annotate_is_a_top_level_subcommand(self):
         with mock.patch('sys.stdout', new_callable=io.StringIO) as out:
@@ -490,9 +624,9 @@ class TestAnnotateCli(unittest.TestCase):
         text = out.getvalue()
         for flag in ('--query', '--reference', '--sequence-region', '--partition-by',
                      '--paired', '--identity-threshold', '--distance-metric',
-                     '--threads', '--out'):
+                     '--count-field', '--threads', '--outdir'):
             self.assertIn(flag, text)
-        for gone in ('--backend', '--gene-match', 'compairr', 'python'):
+        for gone in ('--backend', '--gene-match', 'compairr', 'python', '-o,', '--out '):
             self.assertNotIn(gone, text.lower())
 
     def test_defaults(self):
@@ -519,7 +653,8 @@ class TestAnnotateCli(unittest.TestCase):
     def test_handle_annotate_forwards_every_flag(self):
         args = getArgParser().parse_args(self.BASE + [
             '--sequence-region', 'CDRs', '--partition-by', 'VJL',
-            '--identity-threshold', '0.9', '--threads', '4'])
+            '--identity-threshold', '0.9', '--threads', '4',
+            '--count-field', 'umi_count'])
 
         with mock.patch('immvoke.Sources.Specificity.AnnotateCli.annotateSpecificity') \
                 as annotate:
@@ -529,7 +664,7 @@ class TestAnnotateCli(unittest.TestCase):
             query=Path('q.tsv'), reference=Path('r.tsv'), sequence_region='CDRs',
             partition_by='VJL', paired=False, identity_threshold=0.9,
             distance_metric='hamming', threads=4,
-            output=Path('o.tsv'))
+            outdir=Path('run'), count_field='umi_count')
 
     def test_end_to_end(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -538,12 +673,16 @@ class TestAnnotateCli(unittest.TestCase):
                 tmp / 'q.tsv', sep='\t', index=False)
             airr([heavy('ref1', 'CARQYW')]).to_csv(tmp / 'r.tsv', sep='\t',
                                                     index=False)
-            args = getArgParser().parse_args([
-                'annotate', '--query', str(tmp / 'q.tsv'), '--reference',
-                str(tmp / 'r.tsv'), '-o', str(tmp / 'out.tsv'),
-                '--partition-by', 'VJ', '--identity-threshold', '0.8'])
+            argv = ['annotate', '--query', str(tmp / 'q.tsv'), '--reference',
+                    str(tmp / 'r.tsv'), '--outdir', str(tmp / 'run'),
+                    '--partition-by', 'VJ', '--identity-threshold', '0.8']
+            args = getArgParser().parse_args(argv)
 
-            self.assertEqual(handleAnnotate(args), 0)
+            with mock.patch('sys.argv', ['/venv/bin/immvoke'] + argv):
+                self.assertEqual(handleAnnotate(args), 0)
 
-            written = pandas.read_csv(tmp / 'out.tsv', sep='\t', keep_default_na=False)
-            self.assertEqual(written['hit_ids'].tolist(), ['ref1', ''])
+            written = pandas.read_csv(tmp / 'run' / ANNOTATION_FILE, sep='\t',
+                                      keep_default_na=False)
+            metadata = yaml.safe_load((tmp / 'run' / ANNOTATION_METADATA).read_text())
+        self.assertEqual(written['hit_ids'].tolist(), ['ref1', ''])
+        self.assertEqual(metadata['command'], ' '.join(['immvoke'] + argv))

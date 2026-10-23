@@ -19,8 +19,9 @@ from pathlib import Path
 # Immvoke imports
 from immvoke.Commandline import CommonHelpFormatter
 
-#: Written into when no --outdir is given.
-DEFAULT_OUTDIR = Path('tmp')
+#: Written into when no --outdir is given; the table lands in its iedb/
+#: folder (see immvoke.Cli.handleSpecificityDownload).
+DEFAULT_OUTDIR = Path('databases')
 
 
 def addBcrParser(dbs):
@@ -41,7 +42,8 @@ def addBcrParser(dbs):
                     'download bcr`.',
         formatter_class=CommonHelpFormatter)
     parser.add_argument('--outdir', type=Path, default=DEFAULT_OUTDIR,
-                        help='directory to write into')
+                        help='directory to write into; the table lands at '
+                             'iedb/bcr.tsv inside it')
 
 
 def handleBcr(args):

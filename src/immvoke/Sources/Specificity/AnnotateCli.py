@@ -25,7 +25,13 @@ from pathlib import Path
 
 # Immvoke imports
 from immvoke.Commandline import CommonHelpFormatter
-from immvoke.Sources.Specificity.Annotate import annotateSpecificity
+from immvoke.Sources.Specificity.Annotate import (
+    ANNOTATION_FILE,
+    ANNOTATION_METADATA,
+    DEFAULT_COUNT_FIELD,
+    PAIRS_FILE,
+    annotateSpecificity,
+)
 
 
 def addAnnotateParser(commands):
@@ -79,6 +85,13 @@ def addAnnotateParser(commands):
                              '--sequence-region, --partition-by, '
                              '--identity-threshold and --distance-metric '
                              'have no effect here')
+    parser.add_argument('--count-field', dest='count_field',
+                        default=DEFAULT_COUNT_FIELD, metavar='COLUMN',
+                        help='--paired only: when a query cell has several '
+                             'heavy (or light) chains, keep the one with the '
+                             'highest value in this AIRR count column (e.g. '
+                             'umi_count); on a tie, a blank count, or no such '
+                             'column, the first in the file')
     parser.add_argument('--identity-threshold', dest='identity_threshold',
                         type=float, default=None, metavar='FRACTION',
                         help='minimum sequence identity in (0.0, 1.0], e.g. '
@@ -99,8 +112,13 @@ def addAnnotateParser(commands):
                         help='threads for symscan\'s thread pool (-1 for '
                              'every core; only the first symscan run in a '
                              'process sets it)')
-    parser.add_argument('-o', '--out', type=Path, required=True,
-                        help='write the annotation table here')
+    parser.add_argument('--outdir', type=Path, required=True,
+                        help='folder to write into, created if needed: %s '
+                             '(the annotation table), %s (every matched '
+                             '(query, reference) pair with its score) and %s '
+                             '(the options, inputs and counts of this run)'
+                             % (ANNOTATION_FILE, PAIRS_FILE,
+                                ANNOTATION_METADATA))
 
 
 def handleAnnotate(args):
@@ -119,6 +137,6 @@ def handleAnnotate(args):
         sequence_region=args.sequence_region, partition_by=args.partition_by,
         paired=args.paired, identity_threshold=args.identity_threshold,
         distance_metric=args.distance_metric, threads=args.threads,
-        output=args.out)
+        outdir=args.outdir, count_field=args.count_field)
 
     return 0

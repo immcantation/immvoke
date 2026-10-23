@@ -52,7 +52,8 @@ def _levenshtein(a, b):
 
 def bruteForceAnnotation(queries, reference, compare_cols, max_distance,
                          distance_type='hamming', id_col='id', exact_cols=None,
-                         threshold_is_fraction=False, gene_cols=None):
+                         threshold_is_fraction=False, gene_cols=None,
+                         return_pairs=False):
     """
     The result table runSymscanAnnotation must produce, by brute force.
 
@@ -69,7 +70,7 @@ def bruteForceAnnotation(queries, reference, compare_cols, max_distance,
     exact = exact_cols or []
     gate = GeneGate(queries, reference, gene_cols) if gene_cols else None
 
-    rows = []
+    rows, pairs = [], []
     for q, values in enumerate(query_values):
         blank = '' in values
         length = sum(len(v) for v in values)
@@ -100,12 +101,25 @@ def bruteForceAnnotation(queries, reference, compare_cols, max_distance,
         row = {'query_row': q, 'n_hits_total': len(order),
                'min_mismatches': float(best[order[0]][0]) if order else float('nan'),
                'is_unique_hit': len(order) <= 1, 'hit_ids': ';'.join(order)}
+        positions = {}
         if hamming:
             single = len(compare_cols) == 1
-            row['mismatch_positions'] = ';'.join(
-                ','.join(str(pos) if single else '%d:%d' % (col, pos)
-                         for col, pos in best[x][2])
-                for x in order)
+            positions = {x: ','.join(str(pos) if single else '%d:%d' % (col, pos)
+                                     for col, pos in best[x][2])
+                         for x in order}
+            row['mismatch_positions'] = ';'.join(positions[x] for x in order)
         rows.append(row)
+        for x in order:
+            pair = {'query_row': q, 'hit_id': x, 'mismatches': best[x][0],
+                    'identity': 1 - best[x][0] / length}
+            if hamming:
+                pair['mismatch_positions'] = positions[x]
+            pairs.append(pair)
 
-    return pandas.DataFrame(rows)
+    result = pandas.DataFrame(rows)
+    if not return_pairs:
+        return result
+
+    columns = ['query_row', 'hit_id', 'mismatches', 'identity']
+    return result, pandas.DataFrame(
+        pairs, columns=columns + (['mismatch_positions'] if hamming else []))

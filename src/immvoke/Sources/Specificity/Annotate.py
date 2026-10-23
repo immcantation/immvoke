@@ -32,12 +32,21 @@ __author__ = 'Pramod Shinde'
 
 # Imports
 import logging
+import sys
 from pathlib import Path
 
 import pandas
+import yaml
 
 # Immvoke imports
 from immvoke.Exceptions import AnnotationError
+from immvoke.Provenance import (
+    DOWNLOAD_METADATA,
+    METADATA_VERSION,
+    commandLine,
+    timestamp,
+)
+from immvoke.Version import __version__
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +65,15 @@ CELL_ID_COL = 'cell_id'
 LOCUS_COL = 'locus'
 HEAVY_LOCUS = 'IGH'
 LIGHT_LOCI = ('IGK', 'IGL')
+#: The AIRR count column that picks one heavy and one light chain per query
+#: cell in paired annotation, unless the caller names another.
+DEFAULT_COUNT_FIELD = 'duplicate_count'
+
+#: What annotateSpecificity writes into its outdir: the result, the
+#: (query, reference) pairs behind it, and the record of the run.
+ANNOTATION_FILE = 'annotation.tsv'
+PAIRS_FILE = 'annotation_pairs.tsv'
+ANNOTATION_METADATA = 'annotation_metadata.yml'
 
 #: Slack added before truncating a fraction-of-length threshold to a count,
 #: so float error can't drop it by one (e.g. (1 - 0.9) * 10 is 0.99999...).
@@ -177,7 +195,7 @@ def _hitsByCellId(query_chain, chain_result, cell_id_col):
 
 def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
                              vgene_col='v_call', jgene_col='j_call',
-                             threads=1):
+                             threads=1, return_pairs=False):
     """
     Classify each query antibody by whether the *same* reference antibody
     agrees with it on the heavy chain, the light chain, both, or neither.
@@ -201,13 +219,19 @@ def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
       vgene_col (str): the V-gene call column.
       jgene_col (str): the J-gene call column.
       threads (int): symscan's thread pool; see Symscan.runSymscanAnnotation.
+      return_pairs (bool): also return the (query, reference) antibody pairs
+        behind the hit ids.
 
     Returns:
       pandas.DataFrame: one row per query `cell_id`: `classification` (one
       of `both`, `heavy_only`, `light_only`, `conflicting`, `neither`),
       `heavy_hit_ids`, `light_hit_ids` (every reference antibody agreeing on
       that chain alone, semicolon joined, sorted) and `both_hit_ids` (their
-      intersection -- non-empty only when `classification` is `both`).
+      intersection -- non-empty only when `classification` is `both`); its
+      `attrs['skipped_query_rows']` counts the query chain rows symscan
+      could not compare (see Symscan.py). With `return_pairs`, a tuple: that table, and one row per (query antibody,
+      reference antibody) agreeing on either chain -- `cell_id`, `hit_id`
+      and `matched_chains` (`both`, `heavy` or `light`).
     """
     query_heavy = queries[queries[LOCUS_COL] == HEAVY_LOCUS]
     query_light = queries[queries[LOCUS_COL].isin(LIGHT_LOCI)]
@@ -234,11 +258,14 @@ def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
     heavy_hits = _hitsByCellId(query_heavy, heavy_result, CELL_ID_COL)
     light_hits = _hitsByCellId(query_light, light_result, CELL_ID_COL)
 
-    rows = []
+    rows, pairs = [], []
     for cell_id in sorted(set(queries[CELL_ID_COL])):
         heavy = heavy_hits.get(cell_id, set())
         light = light_hits.get(cell_id, set())
         both = heavy & light
+        for hit in sorted(heavy | light):
+            matched = 'both' if hit in both else 'heavy' if hit in heavy else 'light'
+            pairs.append({'cell_id': cell_id, 'hit_id': hit, 'matched_chains': matched})
 
         if both:
             classification = 'both'
@@ -259,7 +286,14 @@ def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
             'both_hit_ids': ';'.join(sorted(both)),
         })
 
-    return pandas.DataFrame(rows)
+    result = pandas.DataFrame(rows)
+    result.attrs['skipped_query_rows'] = (heavy_result.attrs['skipped_query_rows']
+                                          + light_result.attrs['skipped_query_rows'])
+    if not return_pairs:
+        return result
+
+    return result, pandas.DataFrame(pairs, columns=['cell_id', 'hit_id',
+                                                    'matched_chains'])
 
 
 # ── high level API: annotateSpecificity() ───────────────────────────────────
@@ -433,6 +467,59 @@ def _restrictToHeavyChain(frame, label):
     return frame.reset_index(drop=True)
 
 
+def _oneChainPerCell(frame, count_field, label):
+    """
+    Keep one heavy chain (IGH) and one light chain (IGK or IGL) per cell_id:
+    the one with the highest `count_field`. On a tie, a blank count, or no
+    such column at all, the row that comes first in the file is kept. Rows
+    of other loci are kept as they are.
+
+    Arguments:
+      frame (pandas.DataFrame): the table, with cell_id and locus columns.
+      count_field (str): the AIRR count column to rank chains by, e.g.
+        'duplicate_count' or 'umi_count'.
+      label (str): 'query' or 'reference', for the log line only.
+
+    Returns:
+      pandas.DataFrame: `frame` without the extra chains, rows in their
+      original order.
+    """
+    frame = frame.reset_index(drop=True)
+    if count_field in frame.columns:
+        counts = pandas.to_numeric(frame[count_field], errors='coerce')
+        # A blank count ranks below any number.
+        counts = counts.fillna(float('-inf'))
+    else:
+        counts = pandas.Series(0, index=frame.index)
+
+    drop = []
+    report = {}
+    for name, chain in (('heavy', frame[LOCUS_COL] == HEAVY_LOCUS),
+                        ('light', frame[LOCUS_COL].isin(LIGHT_LOCI))):
+        rows = frame.index[chain]
+        cells = frame.loc[rows, CELL_ID_COL]
+        several = cells[cells.duplicated(keep=False)]
+        if several.empty:
+            continue
+        # Highest count first; a stable sort keeps file order among ties.
+        ranked = counts[several.index].sort_values(ascending=False, kind='stable')
+        best = frame.loc[ranked.index, CELL_ID_COL].drop_duplicates()
+        drop.extend(several.index.difference(best.index))
+        report[name] = several.nunique()
+
+    if not drop:
+        return frame
+    if count_field in frame.columns:
+        rule = 'the one with the highest %s (the first row on a tie)' % count_field
+    else:
+        rule = 'the first row (no %s column to rank them by)' % count_field
+    log.info('%s: %s; kept %s', label,
+             ', '.join('%d cells had several %s chains' % (n, name)
+                       for name, n in report.items()), rule)
+
+    return frame.drop(index=drop)
+
+
 def _requireAirr(frame, label):
     """
     Require `frame` to be an AIRR rearrangement table: every field the AIRR
@@ -457,7 +544,7 @@ def _requireAirr(frame, label):
 def _runSingleChain(queries, reference, compare_cols, gene_cols, exact_cols,
                     threshold, metric, threads):
     """
-    Run one single-chain comparison through symscan.
+    Run one single-chain comparison through symscan, keeping the pairs too.
 
     Arguments:
       queries (pandas.DataFrame): the query rows, already filtered.
@@ -471,8 +558,8 @@ def _runSingleChain(queries, reference, compare_cols, gene_cols, exact_cols,
       threads (int): symscan's thread pool; see annotateSpecificity.
 
     Returns:
-      pandas.DataFrame: one row per query row, see
-      Symscan.runSymscanAnnotation.
+      tuple: (one row per query row, one row per (query row, hit id)), see
+      Symscan.runSymscanAnnotation's `return_pairs`.
     """
     exact = threshold >= 1.0
     # An exact match is 0 substitutions under either metric -- the same
@@ -488,30 +575,81 @@ def _runSingleChain(queries, reference, compare_cols, gene_cols, exact_cols,
     return runSymscanAnnotation(queries, reference, compare_cols, tolerance,
                                 distance_type=distance_type,
                                 threshold_is_fraction=not exact,
-                                threads=threads, **gates)
+                                threads=threads, return_pairs=True, **gates)
 
 
-def _writeIfRequested(result, output):
+def _tableRecord(table, frame):
     """
-    Write `result` to `output` as a TSV, if a path was given.
+    Describe an input table for the annotation metadata.
 
     Arguments:
-      result (pandas.DataFrame): the annotation result.
-      output (str): where to write it, or None to skip writing.
+      table (str or pandas.DataFrame): the table as the caller passed it.
+      frame (pandas.DataFrame): the table as read.
+
+    Returns:
+      dict: its `path` (None for a DataFrame) and `rows`.
     """
-    if output is None:
+    path = None if isinstance(table, pandas.DataFrame) else str(table)
+
+    return {'path': path, 'rows': len(frame)}
+
+
+def _referenceSource(reference):
+    """
+    Read which database a reference table came from, off the
+    download_metadata.yml `immvoke specificity` writes in the database's
+    folder, beside the table.
+
+    Arguments:
+      reference (str or pandas.DataFrame): the reference as the caller
+        passed it.
+
+    Returns:
+      dict: `source` (e.g. 'iedb') and `downloaded` (when), or empty when
+      the reference is a DataFrame, or no readable record sits beside it.
+    """
+    if isinstance(reference, pandas.DataFrame):
+        return {}
+    path = Path(reference).parent / DOWNLOAD_METADATA
+    try:
+        record = yaml.safe_load(path.read_text())
+    except (OSError, yaml.YAMLError):
+        return {}
+    if not isinstance(record, dict) or 'source' not in record:
+        return {}
+
+    runs = record.get('runs') or [{}]
+    return {'source': record['source'], 'downloaded': runs[-1].get('finished')}
+
+
+def _writeOutputs(outdir, result, pairs, metadata):
+    """
+    Write the annotation bundle: ANNOTATION_FILE, PAIRS_FILE and
+    ANNOTATION_METADATA, into `outdir`.
+
+    Arguments:
+      outdir (str): the folder to write into, or None to skip writing.
+      result (pandas.DataFrame): the annotation result.
+      pairs (pandas.DataFrame): the (query, reference) pairs behind it.
+      metadata (dict): the run record, see annotateSpecificity.
+    """
+    if outdir is None:
         return
 
-    out = Path(output)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    result.to_csv(out, sep='\t', index=False)
-    log.info('wrote %s', out)
+    out = Path(outdir)
+    out.mkdir(parents=True, exist_ok=True)
+    for table, name in ((result, ANNOTATION_FILE), (pairs, PAIRS_FILE)):
+        table.to_csv(out / name, sep='\t', index=False)
+    with open(out / ANNOTATION_METADATA, 'w') as handle:
+        yaml.safe_dump(metadata, handle, sort_keys=False)
+    log.info('wrote %s, %s and %s into %s', ANNOTATION_FILE, PAIRS_FILE,
+             ANNOTATION_METADATA, out)
 
 
 def annotateSpecificity(query, reference, sequence_region='CDR3H',
                         partition_by=None, paired=False, identity_threshold=None,
                         distance_metric='hamming', threads=1,
-                        output=None):
+                        outdir=None, count_field=DEFAULT_COUNT_FIELD):
     """
     Annotate a query receptor table against a reference specificity table.
 
@@ -537,6 +675,11 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
         with the same reference antibody (runPairedExactAnnotation). When
         False, only heavy chain (locus IGH) rows are compared; a table
         without a locus column is compared whole.
+      count_field (str): under `paired`, a query cell with several heavy
+        (or light) chains keeps only the one with the highest value in this
+        AIRR count column -- 'duplicate_count' by default, or e.g.
+        'umi_count' -- or the first in the file on a tie, a blank count, or
+        no such column.
       identity_threshold (float): minimum sequence identity in (0.0, 1.0];
         None or 1.0 requires an exact match, a lower value allows up to
         floor((1 - identity_threshold) * query length) differences. Ignored
@@ -547,7 +690,14 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
         `identity_threshold` is below 1.0.
       threads (int): symscan's thread pool size (-1 for every core); only
         the first symscan run in a process sets it.
-      output (str): if given, also write the result here as a TSV.
+      outdir (str): if given, also write into this folder: ANNOTATION_FILE
+        (the result), PAIRS_FILE (every matched (query, reference) pair, one
+        row each: `query_row`, `hit_id`, `mismatches`, `identity`, plus
+        `mismatch_positions` under Hamming; under `paired`, `cell_id`,
+        `hit_id` and `matched_chains` -- `both`, `heavy` or `light`;
+        unmatched query rows have none) and ANNOTATION_METADATA (the
+        options, the query and reference with the reference's source
+        database, the counts, and the immvoke version, time and command).
 
     Returns:
       pandas.DataFrame: when `paired`, one row per query `cell_id` (see
@@ -567,6 +717,21 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
     ref = _readAirrTsv(reference)
     _requireAirr(ref, 'reference')
 
+    metadata = {
+        'immvoke_metadata_version': METADATA_VERSION,
+        'generated_by': 'immvoke %s' % __version__,
+        'finished': None,
+        'query': _tableRecord(query, queries),
+        'reference': dict(_tableRecord(reference, ref), **_referenceSource(reference)),
+        'options': {'sequence_region': sequence_region, 'partition_by': partition_by,
+                    'paired': paired, 'identity_threshold': identity_threshold,
+                    'distance_metric': distance_metric, 'count_field': count_field},
+    }
+    # Run through the commandline rather than called from Python, where
+    # sys.argv is some other program's.
+    if Path(sys.argv[0]).name == 'immvoke':
+        metadata['command'] = commandLine()
+
     if paired:
         if partition_by is not None or identity_threshold is not None:
             log.warning('paired annotation always compares V-gene, J-gene and '
@@ -580,11 +745,19 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
             if not frame[LOCUS_COL].isin(chain_loci).any():
                 raise AnnotationError('%s has no antibody chain rows (locus %s) '
                                       'to pair' % (label, ', '.join(chain_loci)))
-        result = runPairedExactAnnotation(queries, ref, threads=threads)
+        queries = _oneChainPerCell(queries, count_field, 'query')
+        result, pairs = runPairedExactAnnotation(queries, ref, threads=threads,
+                                                 return_pairs=True)
+        classes = {label: int(count) for label, count
+                   in result['classification'].value_counts().items()}
         log.info('%d query antibodies: %s', len(result),
-                 ', '.join('%s=%d' % (label, count) for label, count
-                          in result['classification'].value_counts().items()))
-        _writeIfRequested(result, output)
+                 ', '.join('%s=%d' % item for item in classes.items()))
+        metadata['finished'] = timestamp()
+        metadata['results'] = {
+            'query_antibodies': len(result), 'classification': classes,
+            'pairs': len(pairs),
+            'skipped_query_rows': result.attrs['skipped_query_rows']}
+        _writeOutputs(outdir, result, pairs, metadata)
 
         return result
 
@@ -615,11 +788,16 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
         ref = ref.assign(**{_CDR3_LENGTH_COL: ref['cdr3_aa'].str.len().astype(str)})
         exact_cols = [_CDR3_LENGTH_COL]
 
-    result = _runSingleChain(queries, ref, compare_cols, gene_cols, exact_cols,
-                             threshold, metric, threads)
+    result, pairs = _runSingleChain(queries, ref, compare_cols, gene_cols,
+                                    exact_cols, threshold, metric, threads)
     hit = int(result['n_hits_total'].gt(0).sum())
     log.info('%d query rows, %d with at least one hit, %d unique (0 or 1 hit)',
              len(result), hit, int(result['is_unique_hit'].sum()))
-    _writeIfRequested(result, output)
+    metadata['finished'] = timestamp()
+    metadata['results'] = {
+        'query_rows_compared': len(result), 'query_rows_with_hits': hit,
+        'pairs': len(pairs),
+        'skipped_query_rows': result.attrs['skipped_query_rows']}
+    _writeOutputs(outdir, result, pairs, metadata)
 
     return result

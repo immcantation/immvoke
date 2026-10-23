@@ -299,7 +299,7 @@ def _symscanPairs(query_seqs, ref_seqs, limits, distance_type, query_rows,
 def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
                          distance_type='hamming', id_col=DEFAULT_ID_COL,
                          exact_cols=None, threshold_is_fraction=False, threads=1,
-                         gene_cols=None):
+                         gene_cols=None, return_pairs=False):
     """
     Annotate each query row against `reference` allowing up to
     `max_distance` differences in `compare_cols`, via
@@ -332,6 +332,7 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
       gene_cols (list): gene call columns that must name the same gene
         (any allele), e.g. `['v_call', 'j_call']`; a blank or unrecognized
         call agrees with nothing (see Genes.py). None for no such gate.
+      return_pairs (bool): also return the pairs behind `hit_ids`.
 
     Returns:
       pandas.DataFrame: one row per query row, columns `query_row`,
@@ -339,7 +340,13 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
       `mismatch_positions` under 'hamming'. `min_mismatches` is the
       closest hit's distance (edit distance under 'levenshtein'), and
       `hit_ids` the hits' `id_col` values, closest first. Pairs beyond
-      symscan's limits are skipped with a warning (see the module note).
+      symscan's limits are skipped with a warning (see the module note),
+      and counted in the table's `attrs['skipped_query_rows']`.
+      With `return_pairs`, a tuple: that table, and one row per (query row,
+      hit id) in the same order -- `query_row`, `hit_id`, `mismatches`,
+      `identity` (1 - mismatches / the query's compared length, an X
+      counting as identical under 'hamming'), plus `mismatch_positions`
+      under 'hamming'.
 
     Raises:
       AnnotationError: if `distance_type` is not recognized, or
@@ -413,6 +420,7 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
         found.append(pairs)
         skipped.extend(blocks)
     rows, cols, dists = _concat(found)
+    skipped_queries = []
     if skipped:
         skipped_queries = numpy.unique(numpy.concatenate([q for q, _ in skipped]))
         skipped_refs = numpy.unique(numpy.concatenate([r for _, r in skipped]))
@@ -482,5 +490,18 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
     if hamming:
         result['mismatch_positions'] = result['mismatch_positions'].fillna('').astype(str)
     result['is_unique_hit'] = result['n_hits_total'] <= 1
+    result = result[columns]
+    result.attrs['skipped_query_rows'] = len(skipped_queries)
+    if not return_pairs:
+        return result
 
-    return result[columns]
+    query_rows = pairs['query_row'].to_numpy()
+    lengths = numpy.array([len(seq) for seq in query_seqs], dtype=numpy.int64)
+    pair_table = pandas.DataFrame({
+        'query_row': query_rows, 'hit_id': pairs['id'].to_numpy(),
+        'mismatches': pairs['dist'].to_numpy(),
+        'identity': 1 - pairs['dist'].to_numpy() / lengths[query_rows]})
+    if hamming:
+        pair_table['mismatch_positions'] = pairs['positions'].to_numpy()
+
+    return result, pair_table

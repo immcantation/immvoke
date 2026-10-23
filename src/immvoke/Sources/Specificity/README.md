@@ -19,19 +19,32 @@ the epitope and assay context (`iedb_epitope_name`, `iedb_assay_ids`, ...)
 alongside -- and writes it with a `.validation.txt` report next to it.
 
 ```bash
-immvoke specificity bcr --outdir tmp
+immvoke specificity bcr --outdir databases
 ```
 
-The written `tmp/specificity/bcr.tsv` keeps every column IEDB provides and
+Every download lands in its database's own folder under `--outdir`
+(`databases` by default for `specificity bcr`), so more databases can share
+one outdir without mixing their files:
+
+```
+databases/
+└── iedb/
+    ├── bcr.tsv                  # the reference table for annotate
+    ├── bcr.tsv.validation.txt   # AIRR validation report
+    ├── download_metadata.yml    # source, license, citation, when, command
+    └── raw/                     # IEDB's airr_full.zip and the file taken from it
+```
+
+The written `databases/iedb/bcr.tsv` keeps every column IEDB provides and
 always carries every field the AIRR schema requires; one IEDB lacks is
 written blank.
 
 ## Annotate
 
 `immvoke annotate` matches a query AIRR table -- your own receptors --
-against a reference AIRR table, such as the `tmp/specificity/bcr.tsv`
-written above, and reports which reference rows each query row matches. The
-reference must be an AIRR rearrangement table; see
+against a reference AIRR table, such as the `databases/iedb/bcr.tsv`
+downloaded above, and reports which reference rows each query row matches.
+The reference must be an AIRR rearrangement table; see
 [idea.md](idea.md#input-contract) for exactly what that requires. From
 Python, `immvoke.Sources.Specificity.Annotate.annotateSpecificity()` takes
 the same options, as file paths or DataFrames, and returns the result table.
@@ -46,8 +59,9 @@ the same options, as file paths or DataFrames, and returns the result table.
 | `--identity-threshold` | `identity_threshold` | unset (exact), or a fraction in (0, 1] | e.g. `0.9` allows up to 10% of the query's positions to differ |
 | `--distance-metric` | `distance_metric` | `hamming` (default), `levenshtein` | substitutions only, or substitutions, insertions and deletions |
 | `--paired` | `paired` | flag | match heavy and light chain of the same reference antibody |
+| `--count-field` | `count_field` | an AIRR count column; `duplicate_count` (default) | `--paired`: which of a query cell's several heavy (or light) chains to keep -- the highest count |
 | `--threads` | `threads` | `1` (default); `-1` for every core | symscan's threads |
-| `-o`, `--out` | `output` | path | where to write the result TSV |
+| `--outdir` | `outdir` | folder, created if needed | where to write this run's files (see Output) |
 
 `--partition-by` is off by default, but an unpartitioned CDR3 comparison at
 a loose threshold is prone to coincidental hits, especially on short CDR3s,
@@ -57,36 +71,51 @@ so `VJ` is usually what you want there.
 
 ```bash
 # exact CDR3 match
-immvoke annotate --query mine.tsv --reference tmp/specificity/bcr.tsv \
-    -o annotated.tsv
+immvoke annotate --query mine.tsv --reference databases/iedb/bcr.tsv \
+    --outdir annotation/exact
 
 # exact full VDJ match within the same V- and J-gene
-immvoke annotate --query mine.tsv --reference tmp/specificity/bcr.tsv \
-    --sequence-region VDJ --partition-by VJ -o annotated.tsv
+immvoke annotate --query mine.tsv --reference databases/iedb/bcr.tsv \
+    --sequence-region VDJ --partition-by VJ --outdir annotation/vdj_exact
 
 # same V+J gene, CDR3 at 85% amino acid identity (Hamming distance)
-immvoke annotate --query mine.tsv --reference tmp/specificity/bcr.tsv \
-    --partition-by VJ --identity-threshold 0.85 -o annotated.tsv
+immvoke annotate --query mine.tsv --reference databases/iedb/bcr.tsv \
+    --partition-by VJ --identity-threshold 0.85 --outdir annotation/hamming_0.85
 
 # CDR1-3 pooled at 90% identity, same V-gene, J-gene and CDR3 length
-immvoke annotate --query mine.tsv --reference tmp/specificity/bcr.tsv \
+immvoke annotate --query mine.tsv --reference databases/iedb/bcr.tsv \
     --sequence-region CDRs --partition-by VJL --identity-threshold 0.9 \
-    -o annotated.tsv
+    --outdir annotation/cdrs_0.9
 
 # CDR3 at 90% identity allowing insertions/deletions
-immvoke annotate --query mine.tsv --reference tmp/specificity/bcr.tsv \
+immvoke annotate --query mine.tsv --reference databases/iedb/bcr.tsv \
     --partition-by VJ --identity-threshold 0.9 --distance-metric levenshtein \
-    -o annotated.tsv
+    --outdir annotation/levenshtein_0.9
 
 # paired heavy+light match
-immvoke annotate --query mine.tsv --reference tmp/specificity/bcr.tsv \
-    --paired -o annotated.tsv
+immvoke annotate --query mine.tsv --reference databases/iedb/bcr.tsv \
+    --paired --outdir annotation/paired
 ```
 
 ### Output
 
-Without `--paired`, one row per query heavy chain row, including rows with
-no hit:
+Each run writes three files into its `--outdir`, kept apart from the
+downloaded databases:
+
+```
+annotation/exact/
+├── annotation.tsv            # one row per query: its hits
+├── annotation_pairs.tsv      # one row per (query, reference) pair, scored
+└── annotation_metadata.yml   # the options, query, reference and its source
+                              # database, counts, version, time and command
+```
+
+`annotation_metadata.yml` names the reference's database (`source: iedb`)
+by reading the `download_metadata.yml` beside the reference table, so a run
+stays traceable to the database it was annotated against.
+
+`annotation.tsv`, without `--paired`, has one row per query heavy chain
+row, including rows with no hit:
 
 | Column | Meaning |
 | --- | --- |
@@ -100,6 +129,21 @@ no hit:
 With `--paired`, one row per query antibody (`cell_id`): `classification`
 (`both`, `heavy_only`, `light_only`, `conflicting` or `neither`),
 `heavy_hit_ids`, `light_hit_ids` and `both_hit_ids`.
+
+`annotation_pairs.tsv` lists the same hits one (query, reference) pair per
+row, closest first, each with its own score; a query with no hit has no
+row. Without `--paired`:
+
+| Column | Meaning |
+| --- | --- |
+| `query_row` | as above, to join back to the result table |
+| `hit_id` | one matching reference `sequence_id` |
+| `mismatches` | this pair's distance (edit distance under `levenshtein`) |
+| `identity` | `1 - mismatches / query length` (an `X` counts as identical under `hamming`) |
+| `mismatch_positions` | Hamming only: this pair's differing positions |
+
+With `--paired`: `cell_id`, `hit_id` (a reference `cell_id`) and
+`matched_chains` (`both`, `heavy` or `light`).
 
 IEDB lists a receptor once per epitope it was tested against: each record
 gets its own `cell_id`, but the chains keep the receptor's `sequence_id`, so

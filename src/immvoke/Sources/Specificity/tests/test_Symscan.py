@@ -41,6 +41,33 @@ class TestRunSymscanAnnotation(unittest.TestCase):
         self.assertEqual(result['min_mismatches'].tolist(), [1.0])
         self.assertEqual(result['mismatch_positions'].tolist(), ['3'])
 
+    def test_pairs_score_each_hit(self):
+        queries = frame([{'cdr3': 'CARDYW'}, {'cdr3': 'CQQQQQ'}, {'cdr3': 'CARDYW'}])
+        reference = frame([{'id': 'r1', 'cdr3': 'CARQYW'},   # 1 substitution
+                           {'id': 'r2', 'cdr3': 'CARDYW'},   # identical
+                           {'id': 'r2', 'cdr3': 'CAKDYW'}])  # same id, farther
+
+        result, pairs = runSymscanAnnotation(queries, reference, ['cdr3'], 1,
+                                             id_col='id', return_pairs=True)
+
+        self.assertEqual(result['hit_ids'].tolist(), ['r2;r1', '', 'r2;r1'])
+        self.assertEqual(pairs.columns.tolist(), ['query_row', 'hit_id', 'mismatches',
+                                                  'identity', 'mismatch_positions'])
+        self.assertEqual(pairs[['query_row', 'hit_id', 'mismatches']].values.tolist(),
+                         [[0, 'r2', 0], [0, 'r1', 1], [2, 'r2', 0], [2, 'r1', 1]])
+        self.assertEqual(pairs['identity'].tolist(), [1.0, 5 / 6, 1.0, 5 / 6])
+        self.assertEqual(pairs['mismatch_positions'].tolist(), ['', '3', '', '3'])
+
+    def test_pairs_without_a_hit_are_empty(self):
+        _, pairs = runSymscanAnnotation(frame([{'cdr3': 'CARDYW'}]),
+                                        frame([{'id': 'r1', 'cdr3': 'CQQQQQ'}]),
+                                        ['cdr3'], 0, id_col='id',
+                                        distance_type='levenshtein', return_pairs=True)
+
+        self.assertEqual(len(pairs), 0)
+        self.assertEqual(pairs.columns.tolist(),
+                         ['query_row', 'hit_id', 'mismatches', 'identity'])
+
     def test_hamming_over_budget_does_not_hit(self):
         queries = frame([{'cdr3': 'CARDYW'}])
         reference = frame([{'id': 'r1', 'cdr3': 'CQRQYW'}])  # 2 substitutions
@@ -330,11 +357,12 @@ class TestSymscanMatchesBruteForce(unittest.TestCase):
                 frame([row(i) for i in range(70)]))
 
     def _check(self, queries, reference, *args, **kwargs):
-        expected = bruteForceAnnotation(queries, reference, *args, id_col='id',
-                                        **kwargs)
-        result = runSymscanAnnotation(queries, reference, *args, id_col='id',
-                                      **kwargs)
+        expected, expected_pairs = bruteForceAnnotation(
+            queries, reference, *args, id_col='id', return_pairs=True, **kwargs)
+        result, pairs = runSymscanAnnotation(queries, reference, *args, id_col='id',
+                                             return_pairs=True, **kwargs)
         pandas.testing.assert_frame_equal(result, expected, check_dtype=False)
+        pandas.testing.assert_frame_equal(pairs, expected_pairs, check_dtype=False)
 
     def test_hamming(self):
         cases = [(['cdr3'], 0, {}), (['cdr3'], 1, {}),

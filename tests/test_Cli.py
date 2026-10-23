@@ -26,6 +26,7 @@ from immvoke.Cli import (
     handleReferenceDiff,
     handleReferenceDownload,
     handleReferenceShow,
+    handleSpecificityDownload,
     loadMap,
 )
 from immvoke.Exceptions import ImmvokeError
@@ -286,6 +287,26 @@ class TestHandleDownload(unittest.TestCase):
 
         self.assertTrue((self.outdir / 'samplesheet_airrflow_airr.tsv').exists())
         self.assertTrue((self.outdir / 'samplesheet_airrflow_fasta.tsv').exists())
+
+
+class TestHandleSpecificityDownload(unittest.TestCase):
+    """
+    Tests for the specificity download command's output layout
+    """
+
+    def test_each_database_gets_its_own_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = Namespace(db='fakedb', table='paired', outdir=Path(tmp), limit=None,
+                             dry_run=False, no_resume=False, strict_airr=False)
+
+            with mock.patch('immvoke.Cli.getSpecificitySource',
+                            return_value=StubSource(None)):
+                self.assertEqual(handleSpecificityDownload(args), 0)
+
+            written = sorted(str(p.relative_to(tmp)) for p in Path(tmp).rglob('*')
+                             if p.is_file())
+        self.assertEqual(written, ['fakedb/download_metadata.yml', 'fakedb/paired.tsv',
+                                   'fakedb/raw/' + StubSource.unit.unit_id])
 
 
 def makeReference(root, chain='IGHV', records=(('IGHV1-2*02', 'ACGT'),)):

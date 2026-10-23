@@ -462,10 +462,10 @@ def _addSpecificityParser(commands, name, source):
                                   help='write the result to a TSV file')
             else:
                 leaf.add_argument('--outdir', type=Path, required=True,
-                                  help='directory to write into: raw/ '
-                                       'mirrors the upstream file(s), '
-                                       'specificity/ holds the normalized '
-                                       'TSV(s)')
+                                  help='directory to write into, one '
+                                       'folder per database: <db>/<table>.tsv '
+                                       'is the normalized table, <db>/raw/ '
+                                       'mirrors the upstream file(s)')
                 leaf.add_argument('--dry-run', action='store_true',
                                   help='report what would be fetched, then stop')
                 leaf.add_argument('--no-resume', action='store_true',
@@ -1014,15 +1014,19 @@ def handleSpecificitySearch(args):
 
 
 def handleSpecificityDownload(args):
-    """Download one or more tables: a raw mirror plus one normalized TSV each."""
+    """
+    Download one or more tables: a raw mirror plus one normalized TSV each,
+    all in the database's own folder, `<outdir>/<db>/` -- so several
+    databases can share one outdir without mixing their files or their
+    download_metadata.yml.
+    """
     client = makeClient(args)
     source = getSpecificitySource(args.db, client)
     filters = collectFilters(args)
     tables = _resolveSpecificityTables(source, args)
 
-    outdir = Path(args.outdir)
+    outdir = Path(args.outdir) / args.db
     raw_dir = outdir / 'raw'
-    normalized_dir = outdir / 'specificity'
 
     records = []
     formats_written = set()
@@ -1039,7 +1043,7 @@ def handleSpecificityDownload(args):
             result = source.fetchUnit(unit, raw_dir, resume=not args.no_resume)
             _, chunks, report = source.convertUnit(result.path, unit)
 
-            dest = normalized_dir / ('%s.tsv' % table)
+            dest = outdir / ('%s.tsv' % table)
             if table in source.airr_collections:
                 validation = Convert.writeAirr(chunks, dest,
                                                strict=args.strict_airr)
@@ -1075,13 +1079,16 @@ def handleSpecificityDownload(args):
 
 
 def handleSpecificityDownloadAll(args):
-    """Download every table of every registered specificity database."""
+    """
+    Download every table of every registered specificity database, each
+    into its own `<outdir>/<db>/` (see handleSpecificityDownload).
+    """
     outdir = Path(args.outdir)
 
     for name in sorted(SPECIFICITY_REGISTRY):
         log.info('downloading specificity source %s', name)
         handleSpecificityDownload(Namespace(
-            db=name, table='all', outdir=outdir / name, limit=args.limit,
+            db=name, table='all', outdir=outdir, limit=args.limit,
             dry_run=args.dry_run, no_resume=False,
             strict_airr=args.strict_airr))
 
