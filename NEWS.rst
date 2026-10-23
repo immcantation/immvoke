@@ -11,14 +11,22 @@ Specificity:
   bcr`` as a shortcut for IEDB's BCR table, downloaded as a schema-validated
   AIRR rearrangement TSV with one record per chain, linked by ``cell_id``,
   taking IEDB's calculated (IMGT standardized) V/D/J-gene calls over the
-  curated ones.
+  curated ones, and keeping human receptors only.
++ Each specificity download lands in its database's own folder,
+  ``<outdir>/<db>/``: the normalized ``<table>.tsv``, ``raw/`` and its own
+  ``download_metadata.yml``.
 + Added ``immvoke annotate``, to annotate a query AIRR table against a
-  reference one (e.g. IEDB's BCR table): exact (``--exact``), substitution
-  tolerant (``--fuzzy``, ``--identity``), indel tolerant (``--levenshtein``)
-  and paired heavy+light (``--paired``) matching.
-+ ``immvoke annotate`` runs every mode through symscan_ by default; pure
-  Python (``--backend python``, tolerant modes) remains available and gives
-  the same result.
+  reference one (e.g. IEDB's BCR table) through symscan_: the heavy chain
+  CDR3, full VDJ or pooled CDR1-3 (``--sequence-region``), within the same
+  V/J-gene (``--partition-by``), exact or at an identity threshold
+  (``--identity-threshold``) under Hamming or Levenshtein distance
+  (``--distance-metric``), or heavy+light chain of the same antibody
+  (``--paired``, one chain of each kind per cell picked by
+  ``--count-field``).
++ ``immvoke annotate --outdir`` writes ``annotation.tsv`` (the hits per
+  query), ``annotation_pairs.tsv`` (one scored row per matched query and
+  reference pair) and ``annotation_metadata.yml`` (the options, inputs,
+  reference database and counts of the run).
 
 .. _IEDB: https://www.iedb.org/
 .. _CoV-AbDab: https://opig.stats.ox.ac.uk/webapps/covabdab/

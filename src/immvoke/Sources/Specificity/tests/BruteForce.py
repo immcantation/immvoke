@@ -2,7 +2,7 @@
 A brute-force reference matcher, for tests only
 
 Compares every query row with every reference row directly -- no index, no
-grouping, no slack -- and builds the same result table as
+grouping, no slack -- and builds the same result and pairs tables as
 Symscan.runSymscanAnnotation, so symscan's answers can be checked against an
 implementation simple enough to trust by reading it. Far too slow for real
 tables.

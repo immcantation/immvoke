@@ -306,10 +306,10 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
     symscan.get_neighbors_across.
 
     symscan has no gate of its own, so `exact_cols` (and, for a pooled
-    multi-column Hamming comparison, each column's length -- the same
-    per-column length rule Annotate.runFuzzyAnnotation buckets on) and
-    `gene_cols` are applied to the pairs symscan returns rather than before
-    it runs: the distance comes first, the gene check second. An 'X' matches
+    multi-column Hamming comparison, each column's length, so the columns
+    line up one by one) and `gene_cols` are applied to the pairs symscan
+    returns rather than before it runs: the distance comes first, the gene
+    check second. An 'X' matches
     any residue under 'hamming'; see the module note.
 
     Arguments:
@@ -340,8 +340,9 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
       `mismatch_positions` under 'hamming'. `min_mismatches` is the
       closest hit's distance (edit distance under 'levenshtein'), and
       `hit_ids` the hits' `id_col` values, closest first. Pairs beyond
-      symscan's limits are skipped with a warning (see the module note),
-      and counted in the table's `attrs['skipped_query_rows']`.
+      symscan's limits are skipped with a warning (see the module note);
+      `attrs['skipped_query_rows']` counts the query rows that may
+      therefore miss hits.
       With `return_pairs`, a tuple: that table, and one row per (query row,
       hit id) in the same order -- `query_row`, `hit_id`, `mismatches`,
       `identity` (1 - mismatches / the query's compared length, an X
@@ -495,6 +496,8 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
     if not return_pairs:
         return result
 
+    # The pairs behind hit_ids, in the same order. Identity is against the
+    # query's compared length, the length identity_threshold scales with.
     query_rows = pairs['query_row'].to_numpy()
     lengths = numpy.array([len(seq) for seq in query_seqs], dtype=numpy.int64)
     pair_table = pandas.DataFrame({

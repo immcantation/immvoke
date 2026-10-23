@@ -47,7 +47,8 @@ downloaded above, and reports which reference rows each query row matches.
 The reference must be an AIRR rearrangement table; see
 [idea.md](idea.md#input-contract) for exactly what that requires. From
 Python, `immvoke.Sources.Specificity.Annotate.annotateSpecificity()` takes
-the same options, as file paths or DataFrames, and returns the result table.
+the same options, as file paths or DataFrames, returns the result table,
+and, given `outdir`, writes the same files the command does.
 
 ### Options
 

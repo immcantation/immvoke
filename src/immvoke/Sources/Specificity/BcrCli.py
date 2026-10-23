@@ -6,7 +6,8 @@ only table this project annotates against, so this drops both the source
 name and the `download` verb -- naming the table is enough. Calling it
 fetches IEDB's AIRR export and writes its BCR table as an AIRR rearrangement
 TSV that keeps every column IEDB provides -- the epitope and assay context
-included -- with every field the AIRR schema requires present.
+included -- with every field the AIRR schema requires present, at
+`<outdir>/iedb/bcr.tsv`.
 """
 
 # Info

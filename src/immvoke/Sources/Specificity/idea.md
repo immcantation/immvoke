@@ -15,12 +15,13 @@ always run; the others are set with the option shown (the
 | --- | --- | --- | --- | --- |
 | 1 | Check the reference is AIRR | *automatic* | -- | -- |
 | 2 | Paired or single chain? | `--paired` | on, off | off |
+| 2a | Paired: one heavy and one light chain per query cell | `--count-field` | an AIRR count column | `duplicate_count` |
 | 3 | Keep heavy chain rows | *automatic* | `IGH` only | -- |
 | 4 | Sequence to compare | `--sequence-region` | `CDR3H`, `VDJ`, `CDRs` | `CDR3H` |
 | 5 | Gene gate | `--partition-by` | none, `V`, `VJ`, `VJL` | none |
 | 6 | How close is a hit | `--identity-threshold` | a fraction in (0, 1] | exact |
 | 7 | Distance | `--distance-metric` | `hamming`, `levenshtein` | `hamming` |
-| 8 | Search | *automatic* | symscan; rows too large for it are skipped, with a warning | -- |
+| 8 | Search | *automatic* | symscan; rows too large for it are skipped, with a warning, and counted in `annotation_metadata.yml` | -- |
 | 9 | Output | `--outdir` (`outdir` in Python) | `annotation.tsv` (also returned as a DataFrame), `annotation_pairs.tsv` (one scored (query, reference) pair per row) and `annotation_metadata.yml` | -- |
 
 With `--paired` on, steps 3-7 are replaced by one fixed comparison: an
@@ -28,11 +29,16 @@ antibody (`cell_id`) matches a reference antibody only if both its heavy and
 its light chain have the same V gene, the same J gene and an exact CDR3 --
 classified `both`, `heavy_only`, `light_only`, `conflicting` or `neither`.
 Without it, every query heavy chain row gets one result row, 0 hits if
-unmatched (`n_hits_total`, `hit_ids`, ...). `annotation_pairs.tsv`
-unfolds those hits into one row per (query, reference) pair with that pair's own
+unmatched (`n_hits_total`, `hit_ids`, ...). `annotation_pairs.tsv` unfolds
+those hits into one row per (query, reference) pair with that pair's own
 `mismatches` and `identity`, where the result table keeps only the closest
 hit's distance. It lists matched pairs only, not every query against every
 reference: symscan never scores a pair beyond the threshold.
+
+`annotation_metadata.yml` records the run: the options, the query and
+reference (with the reference's source database, read from the
+`download_metadata.yml` beside it), the counts -- skipped rows included --
+and the immvoke version, time and command.
 
 ## Input contract
 
@@ -141,10 +147,11 @@ no count column) keeps them all.
   threshold allowing over 14 differences, `X` slack included, or one
   sequence too long to index at that threshold) is left out of the
   comparison, with a warning naming the query rows that may therefore miss
-  hits. On today's IEDB table that is a handful of outliers, such as
-  reference "CDR3s" of 60+ residues at a loose threshold. A VDJ comparison
-  (~120 residues) fits exact matching and thresholds of about 0.99 and up;
-  below that most VDJ rows are skipped.
+  hits, and their count in `annotation_metadata.yml`. On today's IEDB table
+  that is a handful of outliers, such as reference "CDR3s" of 60+ residues
+  at a loose threshold. A VDJ comparison (~110-130 residues) fits up to 4
+  differences: exact matching and thresholds of about 0.97 and up; below
+  that most VDJ rows are skipped.
 - **Order of steps.** symscan measures distance first; the exact-column and
   gene checks are applied to the pairs it returns.
 
@@ -156,5 +163,5 @@ no count column) keeps them all.
 - Antibodies only: TCR tables are not supported yet (no `IGH` rows, so they
   are refused).
 - No substitution-matrix (BLOSUM) scoring.
-- Fuzzy VDJ matching below a threshold of about 0.99 is out of symscan's
+- Fuzzy VDJ matching below a threshold of about 0.97 is out of symscan's
   reach, so those rows are skipped.

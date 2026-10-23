@@ -327,10 +327,10 @@ class TestSymscanExactMatch(unittest.TestCase):
 
 class TestSymscanMatchesBruteForce(unittest.TestCase):
     """
-    runSymscanAnnotation must return exactly the table a brute-force
-    comparison of every pair returns -- checked on seeded random tables
-    built to hit the edge cases (X residues, blanks, duplicate ids, exact
-    and gene gates, pooled columns, fraction thresholds).
+    runSymscanAnnotation must return exactly the result and pairs tables a
+    brute-force comparison of every pair returns -- checked on seeded
+    random tables built to hit the edge cases (X residues, blanks, duplicate
+    ids, exact and gene gates, pooled columns, fraction thresholds).
     """
 
     def _tables(self, seed):

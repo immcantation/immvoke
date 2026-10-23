@@ -12,9 +12,9 @@ handleAnnotate only forwards them.
 Reads two AIRR rearrangement TSVs already on disk -- typically a user's own
 receptor table as `--query` and a specificity database's downloaded table
 (e.g. `immvoke specificity bcr`'s output) as `--reference` -- and writes
-one antigen specificity annotation per query row. It does not itself
-download or convert anything; that is handled by `immvoke specificity
-bcr`.
+the annotation, its scored (query, reference) pairs and a record of the run
+into `--outdir`. It does not itself download or convert anything; that is
+handled by `immvoke specificity bcr`.
 """
 
 # Info

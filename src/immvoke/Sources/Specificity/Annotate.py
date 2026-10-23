@@ -3,10 +3,12 @@ Antigen specificity annotation: query-vs-reference receptor comparison
 
 For each row of a query AIRR table, find every row of a fixed reference AIRR
 table it agrees with -- one annotation per query row (`query_row`,
-`n_hits_total`, `is_unique_hit`, `hit_ids`). This is the last pipeline stage:
-download a specificity database's table, which lands as an AIRR
-rearrangement TSV (`immvoke specificity bcr`), then annotate a user's own
-AIRR table against it as the reference.
+`n_hits_total`, `is_unique_hit`, `hit_ids`), plus one scored row per matched
+(query, reference) pair. This is the last pipeline stage: download a
+specificity database's table, which lands as an AIRR rearrangement TSV in
+the database's own folder (`immvoke specificity bcr`), then annotate a
+user's own AIRR table against it as the reference, into an output folder of
+its own.
 
 annotateSpecificity() is the entry point `immvoke annotate` wraps: it picks
 the comparison from a few knobs (sequence_region, partition_by,
@@ -298,17 +300,19 @@ def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
 
 # ── high level API: annotateSpecificity() ───────────────────────────────────
 #
-# A file-or-DataFrame-in, DataFrame-and-file-out entry point, for a caller
+# A file-or-DataFrame-in, DataFrame-and-files-out entry point, for a caller
 # who wants "match this receptor table against that reference table". It
-# picks the comparison from a small set of knobs (sequence_region,
-# partition_by, identity_threshold, distance_metric) -- the flow
-# `immvoke annotate` exposes on the commandline:
+# picks the comparison from a small set of knobs (paired, count_field,
+# sequence_region, partition_by, identity_threshold, distance_metric) -- the
+# flow `immvoke annotate` exposes on the commandline:
 #
-#     paired  -> runPairedExactAnnotation (V, J, exact CDR3 on both chains)
+#     paired  -> one heavy and one light chain per query cell (count_field)
+#             -> runPairedExactAnnotation (V, J, exact CDR3 on both chains)
 #     else    -> heavy chain only -> sequence_region columns
 #             -> partition_by gate (none, V, VJ, VJ + CDR3 length)
 #             -> identity_threshold: 1.0 exact, below it Hamming/Levenshtein
 #             -> symscan; rows beyond its limits are skipped, with a warning
+#     then    -> outdir: ANNOTATION_FILE, PAIRS_FILE and ANNOTATION_METADATA
 
 #: sequence_region -> AIRR column(s) to compare. 'CDRs' pools CDR1-3, so it
 #: only runs under Hamming distance (or an exact match), never Levenshtein:

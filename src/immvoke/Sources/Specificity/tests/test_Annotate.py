@@ -172,7 +172,7 @@ class TestAnnotateSpecificity(unittest.TestCase):
     """
     Tests for the high level entry point, step by step through its flow:
     paired?, heavy chain, sequence_region, partition_by,
-    identity_threshold/distance_metric, symscan, output
+    identity_threshold/distance_metric, symscan, the outdir bundle
     """
 
     def _hits(self, queries, reference, **kwargs):
