@@ -92,7 +92,7 @@ class GeneGate:
           list: parseCall of every value of `frame[col]`, in row order --
           each distinct value parsed once.
         """
-        values = frame[col].fillna('').astype(str).tolist()
+        values = frame[col].astype(object).fillna('').astype(str).tolist()
         parsed = {value: parseCall(value) for value in set(values)}
         unparsed = sum(1 for value in values if value.strip() and not parsed[value])
         if unparsed:

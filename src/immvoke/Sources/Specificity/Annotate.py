@@ -146,7 +146,9 @@ def _rowValues(frame, columns):
       list: one tuple per row, values in `columns` order, blank standing in
       for a missing value.
     """
-    return list(frame[columns].fillna('').itertuples(index=False, name=None))
+    # astype(object): an all-blank column read as float takes a '' fill too.
+    return list(frame[columns].astype(object).fillna('').itertuples(index=False,
+                                                                    name=None))
 
 
 def _exactValues(frame, exact_cols):
@@ -471,6 +473,27 @@ def _restrictToHeavyChain(frame, label):
     return frame.reset_index(drop=True)
 
 
+def _withCellId(frame, label):
+    """
+    Drop the rows with a blank cell_id: nothing links such a chain to a
+    partner, so paired annotation cannot pair it -- and must not lump every
+    such row together as one antibody.
+
+    Arguments:
+      frame (pandas.DataFrame): the table, with a cell_id column.
+      label (str): 'query' or 'reference', for the log line only.
+
+    Returns:
+      pandas.DataFrame: `frame` without those rows.
+    """
+    blank = frame[CELL_ID_COL].astype(object).fillna('').astype(str).str.strip() == ''
+    if blank.any():
+        log.warning('%s: %d rows have no cell_id to pair them by; left out of '
+                    'paired annotation', label, int(blank.sum()))
+
+    return frame[~blank]
+
+
 def _oneChainPerCell(frame, count_field, label):
     """
     Keep one heavy chain (IGH) and one light chain (IGK or IGL) per cell_id:
@@ -640,12 +663,14 @@ def _writeOutputs(outdir, result, pairs, metadata):
     if outdir is None:
         return
 
+    # Rendered first, so a value YAML cannot represent fails before any file
+    # is written rather than leaving a partial bundle behind.
+    text = yaml.safe_dump(metadata, sort_keys=False)
     out = Path(outdir)
     out.mkdir(parents=True, exist_ok=True)
     for table, name in ((result, ANNOTATION_FILE), (pairs, PAIRS_FILE)):
         table.to_csv(out / name, sep='\t', index=False)
-    with open(out / ANNOTATION_METADATA, 'w') as handle:
-        yaml.safe_dump(metadata, handle, sort_keys=False)
+    (out / ANNOTATION_METADATA).write_text(text)
     log.info('wrote %s, %s and %s into %s', ANNOTATION_FILE, PAIRS_FILE,
              ANNOTATION_METADATA, out)
 
@@ -676,9 +701,10 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
         tables whatever `sequence_region` is). Ignored when `paired` is True.
       paired (bool): classify each query antibody (`cell_id`) by V-gene,
         J-gene and exact CDR3 agreement on both its heavy and light chain
-        with the same reference antibody (runPairedExactAnnotation). When
-        False, only heavy chain (locus IGH) rows are compared; a table
-        without a locus column is compared whole.
+        with the same reference antibody (runPairedExactAnnotation); rows
+        with a blank `cell_id` are left out, with a warning. When False,
+        only heavy chain (locus IGH) rows are compared; a table without a
+        locus column is compared whole.
       count_field (str): under `paired`, a query cell with several heavy
         (or light) chains keeps only the one with the highest value in this
         AIRR count column -- 'duplicate_count' by default, or e.g.
@@ -727,13 +753,19 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
         'finished': None,
         'query': _tableRecord(query, queries),
         'reference': dict(_tableRecord(reference, ref), **_referenceSource(reference)),
-        'options': {'sequence_region': sequence_region, 'partition_by': partition_by,
-                    'paired': paired, 'identity_threshold': identity_threshold,
-                    'distance_metric': distance_metric, 'count_field': count_field},
+        # .item(): a numpy scalar (e.g. a threshold from numpy.arange) as the
+        # plain Python value YAML can write.
+        'options': {name: value.item() if hasattr(value, 'item') else value
+                    for name, value in (('sequence_region', sequence_region),
+                                        ('partition_by', partition_by),
+                                        ('paired', paired),
+                                        ('identity_threshold', identity_threshold),
+                                        ('distance_metric', distance_metric),
+                                        ('count_field', count_field))},
     }
     # Run through the commandline rather than called from Python, where
     # sys.argv is some other program's.
-    if Path(sys.argv[0]).name == 'immvoke':
+    if Path(sys.argv[0]).stem == 'immvoke':
         metadata['command'] = commandLine()
 
     if paired:
@@ -744,6 +776,8 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
         paired_cols = [CELL_ID_COL, LOCUS_COL, 'cdr3_aa', 'v_call', 'j_call']
         _requireColumns(queries, paired_cols, 'query', 'paired annotation')
         _requireColumns(ref, paired_cols, 'reference', 'paired annotation')
+        queries = _withCellId(queries, 'query')
+        ref = _withCellId(ref, 'reference')
         chain_loci = (HEAVY_LOCUS,) + LIGHT_LOCI
         for frame, label in ((queries, 'query'), (ref, 'reference')):
             if not frame[LOCUS_COL].isin(chain_loci).any():

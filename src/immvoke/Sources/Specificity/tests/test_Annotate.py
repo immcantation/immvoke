@@ -9,9 +9,11 @@ __author__ = 'Pramod Shinde'
 import io
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from unittest import mock
 
+import numpy
 import pandas
 import yaml
 from airr.schema import RearrangementSchema
@@ -358,6 +360,27 @@ class TestAnnotateSpecificity(unittest.TestCase):
             metadata = yaml.safe_load((Path(tmp) / ANNOTATION_METADATA).read_text())
         self.assertEqual(metadata['results']['skipped_query_rows'], 1)
 
+    def test_metadata_takes_numpy_options(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            annotateSpecificity(frame([heavy('q1', 'CARDYW')]),
+                                airr([heavy('ref1', 'CARDYW')]),
+                                identity_threshold=numpy.float64(0.9), outdir=tmp)
+
+            metadata = yaml.safe_load((Path(tmp) / ANNOTATION_METADATA).read_text())
+        self.assertEqual(metadata['options']['identity_threshold'], 0.9)
+
+    def test_a_run_without_hits_fills_text_columns_cleanly(self):
+        """No hit at all leaves hit_ids and mismatch_positions all missing,
+        which pandas reads as float: filling those with '' must not warn
+        (a future pandas raises instead)."""
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')
+            result = annotateSpecificity(frame([heavy('q1', 'CQQQQQ')]),
+                                         airr([heavy('ref1', 'CARDYW')]))
+
+        self.assertEqual(result[['hit_ids', 'mismatch_positions']].values.tolist(),
+                         [['', '']])
+
     def test_pairs_are_written_one_row_per_hit(self):
         queries = [heavy('q1', 'CARDYW'), heavy('q2', 'CQQQQQ'), heavy('q3', 'CARDYY')]
         reference = [heavy('ref1', 'CARDYW'), heavy('ref2', 'CARDYY')]
@@ -482,6 +505,24 @@ class TestAnnotateSpecificity(unittest.TestCase):
                    ('CARDYW', {'duplicate_count': '5', 'umi_count': '9'})]
         self.assertEqual(self._pairedCell(heavies), ['light_only'])
         self.assertEqual(self._pairedCell(heavies, count_field='umi_count'), ['both'])
+
+    def test_paired_leaves_out_rows_without_a_cell_id(self):
+        """Blank cell_ids are not one antibody: each such chain has no
+        partner, so it is left out rather than paired with the others."""
+        def chain(cell_id, locus, cdr3):
+            v, j = ('IGHV1', 'IGHJ1') if locus == 'IGH' else ('IGKV1', 'IGKJ1')
+            return dict(cell_id=cell_id, locus=locus, cdr3_aa=cdr3, v_call=v, j_call=j)
+        queries = [chain('', 'IGH', 'CARDYW'), chain('', 'IGH', 'CAKKKK'),
+                   chain('', 'IGK', 'CQQYNS'), chain('ab1', 'IGH', 'CAKKKK'),
+                   chain('ab1', 'IGK', 'CQQYNS')]
+        reference = [chain('refA', 'IGH', 'CAKKKK'), chain('refA', 'IGK', 'CQQYNS')]
+
+        with self.assertLogs(ANNOTATE, 'WARNING') as logs:
+            result = annotateSpecificity(frame(queries), airr(reference), paired=True)
+
+        self.assertIn('query: 3 rows have no cell_id', logs.output[0])
+        self.assertEqual(result[['cell_id', 'classification']].values.tolist(),
+                         [['ab1', 'both']])
 
     def test_paired_compares_genes_by_name(self):
         rows = [dict(cell_id='ab1', locus='IGH', cdr3_aa='CARDYW', v_call='IGHV1-2*02',

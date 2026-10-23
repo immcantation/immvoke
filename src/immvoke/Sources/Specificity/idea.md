@@ -114,7 +114,8 @@ rows sharing one `cell_id`. It matches a reference antibody only if that
 *same* antibody agrees on V-gene and J-gene (same gene, any allele) and
 exact CDR3 on both chains; a heavy hit on one reference antibody and a light
 hit on another is `conflicting`, not `both`. Region, partition, threshold
-and metric do not apply.
+and metric do not apply. A row with a blank `cell_id` has no partner chain,
+so it is left out, on either side, with a warning giving the count.
 
 A query cell can carry more than one heavy chain, or more than one light
 chain (a doublet, ambient RNA, or a second light chain). Before matching,

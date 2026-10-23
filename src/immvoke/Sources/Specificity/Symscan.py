@@ -486,10 +486,11 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
     result = pandas.DataFrame({'query_row': numpy.arange(len(queries))}).join(
         hits, on='query_row')
     result['n_hits_total'] = result['n_hits_total'].fillna(0).astype(int)
-    # astype(str): an all-missing column would otherwise stay object dtype.
-    result['hit_ids'] = result['hit_ids'].fillna('').astype(str)
-    if hamming:
-        result['mismatch_positions'] = result['mismatch_positions'].fillna('').astype(str)
+    # An all-missing column comes out float: cast it to object before filling
+    # with '' (pandas will refuse a str fill on a float column), then to str.
+    text_cols = ['hit_ids'] + (['mismatch_positions'] if hamming else [])
+    for col in text_cols:
+        result[col] = result[col].astype(object).fillna('').astype(str)
     result['is_unique_hit'] = result['n_hits_total'] <= 1
     result = result[columns]
     result.attrs['skipped_query_rows'] = len(skipped_queries)
