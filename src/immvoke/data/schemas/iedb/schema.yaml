@@ -10,9 +10,103 @@ url_rules: {}
 parse_contracts: {}
 collections:
   bcr:
-    fields: []
+    fields:
+    - name: air_species
+      wildcard: '*'
+      pseudo_values: false
+      values:
+      - Bos taurus
+      - Camelid
+      - Camelus bactrianus
+      - Camelus dromedarius
+      - Camelus ferus
+      - Chiloscyllium plagiosum
+      - Chlorocebus aethiops
+      - Gallus gallus
+      - Ginglymostoma cirratum
+      - Homo sapiens
+      - Lama glama
+      - Macaca fascicularis
+      - Macaca mulatta
+      - Mus musculus
+      - 'Mus musculus 129 GIX+'
+      - Mus musculus B10.RIII
+      - 'Mus musculus BALB/c'
+      - 'Mus musculus C3H/He'
+      - 'Mus musculus C57BL/6'
+      - Mus musculus CBA
+      - 'Mus musculus CBA/J'
+      - Mus musculus FVB
+      - 'Mus musculus HuMAb (Medarex)'
+      - Mus musculus Kunming
+      - Mus musculus Kymouse
+      - Mus musculus PrP null
+      - Mus musculus RBF
+      - Mus musculus Swiss Webster
+      - Mus musculus Xenomouse
+      - Myodes glareolus
+      - Nothocricetulus migratorius
+      - Orectolobus maculatus
+      - Oryctolagus cuniculus
+      - Oryctolagus cuniculus New Zealand White
+      - Pan troglodytes
+      - Rattus
+      - Rattus norvegicus
+      - Rattus norvegicus Sprague-Dawley
+      - Rattus rattus
+      - Squalus acanthias
+      - Sus scrofa
+      - Vicugna pacos
+      - synthetic construct
   tcr:
-    fields: []
+    fields:
+    - name: air_species
+      wildcard: '*'
+      pseudo_values: false
+      values:
+      - Bos taurus
+      - Camelid
+      - Camelus bactrianus
+      - Camelus dromedarius
+      - Camelus ferus
+      - Chiloscyllium plagiosum
+      - Chlorocebus aethiops
+      - Gallus gallus
+      - Ginglymostoma cirratum
+      - Homo sapiens
+      - Lama glama
+      - Macaca fascicularis
+      - Macaca mulatta
+      - Mus musculus
+      - 'Mus musculus 129 GIX+'
+      - Mus musculus B10.RIII
+      - 'Mus musculus BALB/c'
+      - 'Mus musculus C3H/He'
+      - 'Mus musculus C57BL/6'
+      - Mus musculus CBA
+      - 'Mus musculus CBA/J'
+      - Mus musculus FVB
+      - 'Mus musculus HuMAb (Medarex)'
+      - Mus musculus Kunming
+      - Mus musculus Kymouse
+      - Mus musculus PrP null
+      - Mus musculus RBF
+      - Mus musculus Swiss Webster
+      - Mus musculus Xenomouse
+      - Myodes glareolus
+      - Nothocricetulus migratorius
+      - Orectolobus maculatus
+      - Oryctolagus cuniculus
+      - Oryctolagus cuniculus New Zealand White
+      - Pan troglodytes
+      - Rattus
+      - Rattus norvegicus
+      - Rattus norvegicus Sprague-Dawley
+      - Rattus rattus
+      - Squalus acanthias
+      - Sus scrofa
+      - Vicugna pacos
+      - synthetic construct
   bcell:
     fields:
     - name: qualitative_measure

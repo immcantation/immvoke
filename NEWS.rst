@@ -7,11 +7,14 @@ Unreleased
 Specificity:
 
 + Added specificity databases IEDB_, CoV-AbDab_ and ASD_ under
-  ``immvoke specificity <db> search|download``, and ``immvoke specificity
-  bcr`` as a shortcut for IEDB's BCR table, downloaded as a schema-validated
-  AIRR rearrangement TSV with one record per chain, linked by ``cell_id``,
-  taking IEDB's calculated (IMGT standardized) V/D/J-gene calls over the
-  curated ones, and keeping human receptors only.
+  ``immvoke specificity <db> search|download``. IEDB's BCR and TCR tables
+  are downloaded as schema-validated AIRR rearrangement TSVs with one record
+  per chain, linked by ``cell_id``, taking IEDB's calculated (IMGT
+  standardized) V/D/J-gene calls over the curated ones, every receptor
+  species kept unless ``--air_species`` names one (e.g. ``--air_species
+  "Homo sapiens"``; a species includes its strains).
++ Filter flags generated from a source's schema are spelled with
+  underscores, as the field is (``--qualitative_measure``, ``--air_species``).
 + Each specificity download lands in its database's own folder,
   ``<outdir>/<db>/``: the normalized ``<table>.tsv``, ``raw/`` and its own
   ``download_metadata.yml``.

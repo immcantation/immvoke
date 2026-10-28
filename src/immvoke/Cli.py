@@ -65,7 +65,7 @@ def loadSchemaQuietly(name):
         return None
 
 
-def addFilterArgs(parser, schema, source, collection):
+def addFilterArgs(parser, schema, source, collection, cap=VALUE_LIST_CAP):
     """
     Generate one commandline flag per searchable field.
 
@@ -79,6 +79,9 @@ def addFilterArgs(parser, schema, source, collection):
       schema (SourceSchema): the snapshot, or None if none is installed.
       source (str): the source name, for the `schema show` pointer on overflow.
       collection (str): which collection's fields to add.
+      cap (int): list at most this many values in a flag's help, or None to
+        list them all. Specificity databases pass None: `schema show` does
+        not cover them, so their help is the only place the full list shows.
     """
     if schema is None or collection not in schema.collections:
         return
@@ -86,7 +89,7 @@ def addFilterArgs(parser, schema, source, collection):
     for item in schema.getCollection(collection).fields:
         if item.pseudo_values:
             summary = 'filter on whether %s is recorded' % item.name
-        elif len(item.values) <= VALUE_LIST_CAP:
+        elif cap is None or len(item.values) <= cap:
             summary = '%d values: %s' % (len(item.values), ', '.join(item.values))
         else:
             # Overflow only: today's fields (species, disease, ...) all stay well
@@ -452,7 +455,7 @@ def _addSpecificityParser(commands, name, source):
                 description='%s %s.' % (action.capitalize(), summary),
                 formatter_class=CommonHelpFormatter)
             if filter_table is not None:
-                addFilterArgs(leaf, schema, name, filter_table)
+                addFilterArgs(leaf, schema, name, filter_table, cap=None)
             leaf.add_argument('--limit', type=int, default=None,
                               help='stop after this many rows'
                                    if filter_table is not None

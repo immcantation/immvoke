@@ -55,7 +55,7 @@ class Field:
     @property
     def flag(self):
         """str: the commandline flag generated for this field."""
-        return '--%s' % self.name.lower().replace(' ', '-').replace('_', '-')
+        return '--%s' % self.name.lower().replace(' ', '_').replace('-', '_')
 
     def accepts(self, value):
         """

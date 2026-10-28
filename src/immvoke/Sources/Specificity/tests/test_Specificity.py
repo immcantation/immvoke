@@ -268,7 +268,7 @@ class TestIedbSource(unittest.TestCase):
             metadata, chunks = source.readUnit(path, unit)
             frame = pandas.concat(list(chunks), ignore_index=True)
 
-        self.assertEqual(metadata, {'human_cells': frozenset(['1'])})
+        self.assertEqual(metadata, {'kept_cells': None})
         self.assertEqual(list(frame.columns), list(IEDB_AIRR_COLUMNS))
         self.assertEqual(frame['cdr3_aa'].tolist(), ['ARDYW'])
         self.assertEqual(frame['iedb_assay_ids'].tolist(), ['32'])
@@ -307,11 +307,14 @@ class TestIedbAirrExport(unittest.TestCase):
         self.assertEqual(unit.unit_id, 'bcr_full_airr.tsv')
         self.assertTrue(unit.url.endswith('airr_full.zip'))
 
-    def _normalize(self, frame):
+    def _normalize(self, frame, air_species=None):
         """Read and normalize `frame` the way `immvoke specificity iedb
-        download bcr` does, from a downloaded TSV."""
+        download bcr` does, from a downloaded TSV, with --air_species if
+        given."""
         source = IedbSource(makeClient(lambda *a: FakeResponse(200)))
-        unit = DataUnit(unit_id='bcr_full_airr.tsv', collection='bcr', url=BULK_URL)
+        filters = {} if air_species is None else {'air_species': air_species}
+        unit = DataUnit(unit_id='bcr_full_airr.tsv', collection='bcr', url=BULK_URL,
+                        metadata=filters)
         report = {'rows_in': 0, 'rows_out': 0}
 
         with tempfile.TemporaryDirectory() as outdir:
@@ -336,11 +339,10 @@ class TestIedbAirrExport(unittest.TestCase):
              'cdr3_aa': 'QQSKEVPLT',
              'iedb_epitope_name': 'G58, L59', 'iedb_assay_outcome': 'positive'})
 
-    def test_only_human_receptors_are_kept(self):
-        """Per receptor: a chain with no species recorded rides along with a
-        human one; any chain of another species drops the whole receptor."""
+    def _mixedSpecies(self):
+        """Receptors of several species, one of a BALB/c mouse."""
         human, mouse, construct = 'NCBITAXON:9606', 'NCBITAXON:10090', 'NCBITAXON:32630'
-        frame = iedbAirrRows(
+        return iedbAirrRows(
             {'cell_id': 'human', 'sequence_id': '1_1', 'locus_species': human},
             {'cell_id': 'human', 'sequence_id': '1_2', 'locus_species': human},
             {'cell_id': 'humanBlank', 'sequence_id': '2_1', 'locus_species': human},
@@ -348,12 +350,50 @@ class TestIedbAirrExport(unittest.TestCase):
             {'cell_id': 'mouse', 'sequence_id': '3_1', 'locus_species': mouse},
             {'cell_id': 'mixed', 'sequence_id': '4_1', 'locus_species': human},
             {'cell_id': 'mixed', 'sequence_id': '4_2', 'locus_species': construct},
-            {'cell_id': 'blank', 'sequence_id': '5_1', 'locus_species': ''})
+            {'cell_id': 'blank', 'sequence_id': '5_1', 'locus_species': ''},
+            {'cell_id': 'balbc', 'sequence_id': '6_1',
+             'locus_species': 'NCBITAXON:10000000'})
 
-        kept, report = self._normalize(frame)
+    def test_every_species_is_kept_without_air_species(self):
+        kept, report = self._normalize(self._mixedSpecies())
+
+        self.assertEqual(len(kept), 9)
+        self.assertEqual((report['rows_in'], report['rows_out']), (9, 9))
+
+    def test_air_species_keeps_only_that_species(self):
+        """Per receptor: a chain with no species recorded rides along with
+        one of the asked species; any chain of another species drops the
+        whole receptor."""
+        kept, report = self._normalize(self._mixedSpecies(), 'Homo sapiens')
 
         self.assertEqual(kept['sequence_id'].tolist(), ['1_1', '1_2', '2_1', '2_2'])
-        self.assertEqual((report['rows_in'], report['rows_out']), (8, 4))
+        self.assertEqual((report['rows_in'], report['rows_out']), (9, 4))
+
+    def test_air_species_includes_its_strains(self):
+        kept, _ = self._normalize(self._mixedSpecies(), 'Mus musculus')
+        self.assertEqual(kept['sequence_id'].tolist(), ['3_1', '6_1'])
+
+        kept, _ = self._normalize(self._mixedSpecies(), 'Mus musculus BALB/c')
+        self.assertEqual(kept['sequence_id'].tolist(), ['6_1'])
+
+    def test_air_species_is_a_bcr_and_tcr_filter(self):
+        source = IedbSource(makeClient(lambda *a: FakeResponse(200)))
+
+        for table in ('bcr', 'tcr'):
+            query = source.validateQuery(table, {'air_species': 'Homo sapiens'})
+            self.assertEqual(query.filters, {'air_species': 'Homo sapiens'})
+        with self.assertRaises(Exception):
+            source.validateQuery('bcr', {'air_species': 'human'})
+
+    def test_every_species_name_has_codes(self):
+        from immvoke.Sources.Specificity.Iedb import (
+            RECEPTOR_SPECIES,
+            _speciesCodes,
+        )
+
+        for name, parent in RECEPTOR_SPECIES.values():
+            self.assertTrue(_speciesCodes(name), name)
+            self.assertTrue(parent is None or parent in RECEPTOR_SPECIES, name)
 
     def test_records_pass_through_with_provenance(self):
         frame, report = self._normalize(self._antibody())

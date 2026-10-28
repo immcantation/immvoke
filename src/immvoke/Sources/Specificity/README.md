@@ -8,18 +8,23 @@ it. How the matching works, step by step, is in [idea.md](idea.md).
 
 [IEDB](https://www.iedb.org/) (`Iedb.py`) publishes its BCR (antibody)
 receptors in AIRR format, as `bcr_full_airr.tsv` inside its bulk
-`airr_full.zip` export, refreshed weekly. `immvoke specificity iedb download bcr` downloads
-that table, keeping **human receptors only**: a receptor is kept when it has
-a human chain (`locus_species` `NCBITAXON:9606`) and no chain of another
-species -- a chain with no species recorded rides along with its human
-partner, so pairs are never split. The rest is kept as is -- one
+`airr_full.zip` export, refreshed weekly. `immvoke specificity iedb download
+bcr` downloads that table, keeping **every receptor species** unless
+`--air_species` names one. With `--air_species "Homo sapiens"`, a receptor
+is kept when it has a human chain (`locus_species` `NCBITAXON:9606`) and no
+chain of another species -- a chain with no species recorded rides along
+with its partner, so pairs are never split. A species includes its strains:
+`"Mus musculus"` also keeps BALB/c, C57BL/6, Xenomouse and the rest, while
+`"Mus musculus BALB/c"` keeps that strain alone. The names are IEDB's;
+`immvoke specificity iedb download bcr --help` lists them all. The rest is
+kept as is -- one
 rearrangement record per chain, linked by `cell_id`,
 built from IEDB's calculated (IMGT standardized) gene calls and CDRs, with
 the epitope and assay context (`iedb_epitope_name`, `iedb_assay_ids`, ...)
 alongside -- and writes it with a `bcr.airr_validation.log` report next to it.
 
 ```bash
-immvoke specificity iedb download bcr --outdir databases
+immvoke specificity iedb download bcr --air_species "Homo sapiens" --outdir databases
 ```
 
 Every download lands in its database's own folder under `--outdir`, so

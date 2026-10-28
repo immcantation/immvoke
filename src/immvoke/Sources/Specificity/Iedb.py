@@ -14,8 +14,9 @@ The receptor tables (bcr, tcr) come from IEDB's own AIRR export,
 airr_full.zip: one AIRR rearrangement TSV per table, a record per chain
 linked by cell_id, built from IEDB's calculated (IMGT standardized) fields
 and carrying the epitope and assay context alongside. They are already AIRR,
-so normalizeChunk passes them through, adding only provenance columns -- and
-keeping human receptors only (see _humanCells).
+so normalizeChunk passes them through, adding only provenance columns. Every
+receptor species is kept unless --air_species names one (see
+RECEPTOR_SPECIES and _speciesCells).
 bcell and bcr_to_bcell carry no sequences -- one is assay results, the other
 a join table -- so they keep their own column names.
 """
@@ -63,9 +64,67 @@ _TABLE_SOURCE = {
 #: Tables served from the shared AIRR bulk ZIP rather than the API.
 _BULK_TABLES = frozenset(['bcr', 'tcr'])
 
-#: The receptor tables are limited to human receptors: IEDB's AIRR export
-#: records each chain's species in `locus_species`, as an NCBI taxon.
-HUMAN = 'NCBITAXON:9606'
+#: The receptor species IEDB's AIRR export records in `locus_species`, as
+#: NCBI taxon code -> (name, parent code). Names are IEDB's own
+#: (receptor_species_names on its bcr_search/tcr_search API) without the
+#: common name in brackets, so 'Homo sapiens (human)' is 'Homo sapiens'.
+#: Codes from 10000000 up are IEDB's own strain and line codes (its ONTIE
+#: terms), not real NCBI taxa; each names its parent species, so asking for
+#: 'Mus musculus' also keeps BALB/c, C57BL/6, Xenomouse and the rest.
+#: Built by joining the export's codes to those names on
+#: iedb_receptor_group (export of 2026-10-20); a code IEDB adds later is
+#: kept when no species is asked for, but cannot be asked for by name until
+#: it is added here.
+RECEPTOR_SPECIES = {
+    'NCBITAXON:7797': ('Squalus acanthias', None),
+    'NCBITAXON:7801': ('Ginglymostoma cirratum', None),
+    'NCBITAXON:9031': ('Gallus gallus', None),
+    'NCBITAXON:9534': ('Chlorocebus aethiops', None),
+    'NCBITAXON:9541': ('Macaca fascicularis', None),
+    'NCBITAXON:9544': ('Macaca mulatta', None),
+    'NCBITAXON:9598': ('Pan troglodytes', None),
+    'NCBITAXON:9606': ('Homo sapiens', None),
+    'NCBITAXON:9823': ('Sus scrofa', None),
+    'NCBITAXON:9835': ('Camelid', None),
+    'NCBITAXON:9837': ('Camelus bactrianus', None),
+    'NCBITAXON:9838': ('Camelus dromedarius', None),
+    'NCBITAXON:9844': ('Lama glama', None),
+    'NCBITAXON:9913': ('Bos taurus', None),
+    'NCBITAXON:9986': ('Oryctolagus cuniculus', None),
+    'NCBITAXON:10090': ('Mus musculus', None),
+    'NCBITAXON:10114': ('Rattus', None),
+    'NCBITAXON:10116': ('Rattus norvegicus', None),
+    'NCBITAXON:10117': ('Rattus rattus', None),
+    'NCBITAXON:30538': ('Vicugna pacos', None),
+    'NCBITAXON:32630': ('synthetic construct', None),
+    'NCBITAXON:36176': ('Chiloscyllium plagiosum', None),
+    'NCBITAXON:168098': ('Orectolobus maculatus', None),
+    'NCBITAXON:419612': ('Camelus ferus', None),
+    'NCBITAXON:447135': ('Myodes glareolus', None),
+    'NCBITAXON:3122392': ('Nothocricetulus migratorius', None),
+    'NCBITAXON:10000000': ('Mus musculus BALB/c', 'NCBITAXON:10090'),
+    'NCBITAXON:10000038': ('Mus musculus C3H/He', 'NCBITAXON:10090'),
+    'NCBITAXON:10000061': ('Mus musculus FVB', 'NCBITAXON:10090'),
+    'NCBITAXON:10000067': ('Mus musculus C57BL/6', 'NCBITAXON:10090'),
+    'NCBITAXON:10000206': ('Oryctolagus cuniculus New Zealand White',
+                           'NCBITAXON:9986'),
+    'NCBITAXON:10000228': ('Mus musculus CBA', 'NCBITAXON:10090'),
+    'NCBITAXON:10000236': ('Mus musculus CBA/J', 'NCBITAXON:10090'),
+    'NCBITAXON:10000248': ('Mus musculus 129 GIX+', 'NCBITAXON:10090'),
+    'NCBITAXON:10000275': ('Mus musculus B10.RIII', 'NCBITAXON:10090'),
+    'NCBITAXON:10000617': ('Mus musculus HuMAb (Medarex)', 'NCBITAXON:10090'),
+    'NCBITAXON:10000645': ('Mus musculus PrP null', 'NCBITAXON:10090'),
+    'NCBITAXON:10000655': ('Mus musculus Swiss Webster', 'NCBITAXON:10090'),
+    'NCBITAXON:10000657': ('Mus musculus Xenomouse', 'NCBITAXON:10090'),
+    'NCBITAXON:10000667': ('Rattus norvegicus Sprague-Dawley',
+                           'NCBITAXON:10116'),
+    'NCBITAXON:10000915': ('Mus musculus Kunming', 'NCBITAXON:10090'),
+    'NCBITAXON:10001602': ('Mus musculus RBF', 'NCBITAXON:10090'),
+    'NCBITAXON:10002257': ('Mus musculus Kymouse', 'NCBITAXON:10090'),
+}
+
+#: --air_species's vocabulary: every name in RECEPTOR_SPECIES, sorted.
+_AIR_SPECIES = tuple(sorted(name for name, _ in RECEPTOR_SPECIES.values()))
 
 #: qualitative_measure has no server-side filter on bcell_search, so it is
 #: applied client-side after fetching; this is its known controlled
@@ -73,32 +132,52 @@ HUMAN = 'NCBITAXON:9606'
 _QUALITATIVE_MEASURES = ('Positive', 'Positive-High', 'Positive-Intermediate',
                          'Positive-Low', 'Negative')
 
-def _humanCells(path, chunksize):
+def _speciesCodes(name):
+    """
+    The locus_species codes an --air_species name stands for: the species'
+    own code and those of its strains.
+
+    Arguments:
+      name (str): a name from RECEPTOR_SPECIES.
+
+    Returns:
+      frozenset: the matching codes.
+    """
+    return frozenset(code for code, (own, parent) in RECEPTOR_SPECIES.items()
+                     if own == name
+                     or (parent is not None and RECEPTOR_SPECIES[parent][0] == name))
+
+
+def _speciesCells(path, chunksize, codes):
     """
     The receptors (cell_id) of a receptor AIRR table to keep: those with a
-    human chain and no chain of another species. A chain with no species
-    recorded does not count against its receptor, so a human heavy chain
-    keeps its light chain even when only the heavy one names a species.
-    Decided per receptor, not per chain, so a pair is never split.
+    chain of the wanted species and no chain of another. A chain with no
+    species recorded does not count against its receptor, so a heavy chain
+    of the wanted species keeps its light chain even when only the heavy one
+    names a species. Decided per receptor, not per chain, so a pair is never
+    split.
 
     Arguments:
       path (Path): the downloaded AIRR TSV.
       chunksize (int): rows per chunk while scanning it.
+      codes (frozenset): the wanted locus_species codes (see _speciesCodes).
 
     Returns:
       frozenset: the cell_id values to keep.
     """
-    human, other = set(), set()
+    wanted, other = set(), set()
     for chunk in pandas.read_csv(path, sep='\t', dtype=str, na_filter=False,
                                  usecols=['cell_id', 'locus_species'],
                                  chunksize=chunksize):
         species = chunk['locus_species']
-        human.update(chunk.loc[species == HUMAN, 'cell_id'])
-        other.update(chunk.loc[(species != HUMAN) & (species != ''), 'cell_id'])
-    log.info('%s: %d human receptors kept, %d with a non-human chain dropped',
-             Path(path).name, len(human - other), len(other))
+        matched = species.isin(codes)
+        wanted.update(chunk.loc[matched, 'cell_id'])
+        other.update(chunk.loc[~matched & (species != ''), 'cell_id'])
+    log.info('%s: %d receptors of the asked species kept, %d with a chain of '
+             'another species dropped', Path(path).name, len(wanted - other),
+             len(wanted & other))
 
-    return frozenset(human - other)
+    return frozenset(wanted - other)
 
 
 def _rowHash(row):
@@ -151,9 +230,8 @@ class IedbSource(SourceBase):
     homepage = 'https://www.iedb.org/'
     collections = ('bcr', 'tcr', 'bcell', 'bcr_to_bcell')
     collection_help = {
-        'bcr': 'human BCR (antibody) receptor sequences, from the AIRR bulk '
-               'export',
-        'tcr': 'human TCR receptor sequences, from the same AIRR bulk export',
+        'bcr': 'BCR (antibody) receptor sequences, from the AIRR bulk export',
+        'tcr': 'TCR receptor sequences, from the same AIRR bulk export',
         'bcell': 'B-cell assay records: antigen, epitope and qualitative outcome',
         'bcr_to_bcell': 'join table linking BCR receptor groups to B-cell assay records',
     }
@@ -190,9 +268,10 @@ class IedbSource(SourceBase):
         from immvoke.Schema import Collection, Field, SourceSchema
         from immvoke.Version import __version__
 
+        air_species = Field(name='air_species', values=_AIR_SPECIES)
         collections = {
-            'bcr': Collection(name='bcr'),
-            'tcr': Collection(name='tcr'),
+            'bcr': Collection(name='bcr', fields=(air_species,)),
+            'tcr': Collection(name='tcr', fields=(air_species,)),
             'bcell': Collection(name='bcell', fields=(
                 Field(name='qualitative_measure',
                       values=_QUALITATIVE_MEASURES),
@@ -311,12 +390,16 @@ class IedbSource(SourceBase):
         Returns:
           tuple: (metadata, iterator of raw record chunks). IEDB tables carry
           no per-unit metadata line; for bcr and tcr, metadata holds
-          `human_cells`, the receptors normalizeChunk keeps (see
-          _humanCells). bcr and tcr are read as text, blank cells as ''
-          rather than NaN.
+          `kept_cells`, the receptors normalizeChunk keeps (see
+          _speciesCells), or None to keep every receptor when no
+          --air_species was given. bcr and tcr are read as text, blank cells
+          as '' rather than NaN.
         """
         if unit.collection in _BULK_TABLES:
-            metadata = {'human_cells': _humanCells(path, chunksize)}
+            name = (unit.metadata or {}).get('air_species')
+            kept = (None if not name or name == '*'
+                    else _speciesCells(path, chunksize, _speciesCodes(name)))
+            metadata = {'kept_cells': kept}
             return metadata, pandas.read_csv(path, sep='\t', dtype=str,
                                              na_filter=False, chunksize=chunksize)
 
@@ -335,7 +418,7 @@ class IedbSource(SourceBase):
         columns, filtered where the fetch step could not filter.
 
         Arguments:
-          metadata (dict): unused; IEDB tables carry no per-unit metadata.
+          metadata (dict): from readUnit; for bcr and tcr, `kept_cells`.
           chunk (pandas.DataFrame): raw records, IEDB's own columns.
           unit (DataUnit): what they came from.
           offset (int): unused; kept for interface parity with SourceBase.
@@ -347,7 +430,8 @@ class IedbSource(SourceBase):
         """
         if unit.collection in _BULK_TABLES:
             report['rows_in'] += len(chunk)
-            frame = chunk[chunk['cell_id'].isin(metadata['human_cells'])]
+            kept = metadata['kept_cells']
+            frame = chunk if kept is None else chunk[chunk['cell_id'].isin(kept)]
             report['rows_out'] += len(frame)
             frame = coerceAirrTypes(frame.copy())
         else:
