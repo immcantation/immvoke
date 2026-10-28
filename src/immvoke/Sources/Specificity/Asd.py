@@ -31,6 +31,7 @@ import pandas
 from immvoke.Exceptions import AsdFetchError, AsdParseError
 from immvoke.Http import hashFile
 from immvoke.Sources.Base import DataUnit, DownloadResult, SourceBase
+from immvoke.Sources.Specificity.RowHash import rowHashes
 
 log = logging.getLogger(__name__)
 
@@ -97,21 +98,6 @@ def _directorySize(path):
     return sum(item.stat().st_size for item in Path(path).rglob('*')
               if item.is_file())
 
-
-def _rowHash(row):
-    """
-    Build a short content hash for an Ab-Ag pair row.
-
-    Arguments:
-      row (pandas.Series): a row of upstream columns, before provenance
-        columns are added.
-
-    Returns:
-      str: the first 12 hex characters of a SHA-256 digest.
-    """
-    key = '|'.join(str(x) for x in row.tolist())
-
-    return hashlib.sha256(key.encode('utf-8')).hexdigest()[:12]
 
 
 class AsdSource(SourceBase):
@@ -301,12 +287,7 @@ class AsdSource(SourceBase):
                 frame[column] = frame[column].apply(
                     lambda x: json.dumps(x, default=str) if x is not None else '')
 
-        # apply(..., axis=1) on an empty frame cannot infer a row shape, so it
-        # is skipped rather than trusted to return an empty result.
-        if len(frame):
-            row_hash = frame.apply(_rowHash, axis=1)
-        else:
-            row_hash = pandas.Series([], dtype=str, index=frame.index)
+        row_hash = rowHashes(frame)
 
         frame['immvoke_source'] = self.name
         frame['immvoke_collection'] = unit.collection

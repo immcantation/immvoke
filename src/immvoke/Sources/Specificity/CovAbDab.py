@@ -18,7 +18,6 @@ live page.
 __author__ = 'Pramod Shinde'
 
 # Imports
-import hashlib
 import logging
 from datetime import UTC
 
@@ -28,6 +27,7 @@ from bs4 import BeautifulSoup
 # Immvoke imports
 from immvoke.Exceptions import CovAbDabParseError
 from immvoke.Sources.Base import DataUnit, SourceBase
+from immvoke.Sources.Specificity.RowHash import rowHashes
 
 log = logging.getLogger(__name__)
 
@@ -65,21 +65,6 @@ def findCsvUrl(client):
         'no CSV download link found on %s; the homepage layout has changed'
         % HOME_URL)
 
-
-def _rowHash(row):
-    """
-    Build a short content hash for an antibody row.
-
-    Arguments:
-      row (pandas.Series): a row of upstream columns, before provenance
-        columns are added.
-
-    Returns:
-      str: the first 12 hex characters of a SHA-256 digest.
-    """
-    key = '|'.join(str(x) for x in row.tolist())
-
-    return hashlib.sha256(key.encode('utf-8')).hexdigest()[:12]
 
 
 class CovAbDabSource(SourceBase):
@@ -185,12 +170,7 @@ class CovAbDabSource(SourceBase):
         """
         report['rows_in'] += len(chunk)
 
-        # apply(..., axis=1) on an empty frame cannot infer a row shape, so it
-        # is skipped rather than trusted to return an empty result.
-        if len(chunk):
-            row_hash = chunk.apply(_rowHash, axis=1)
-        else:
-            row_hash = pandas.Series([], dtype=str, index=chunk.index)
+        row_hash = rowHashes(chunk)
 
         frame = chunk.copy()
         frame['immvoke_source'] = self.name

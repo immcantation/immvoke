@@ -500,3 +500,34 @@ class TestIedbAirrExport(unittest.TestCase):
             self.assertFalse((Path(outdir) / 'iedb' / 'raw').exists())
             self.assertTrue((Path(outdir) / 'iedb' / 'iedb_bcr.tsv').exists())
             self.assertTrue((Path(outdir) / 'iedb' / 'download_metadata.yml').exists())
+
+
+class TestRowHashes(unittest.TestCase):
+    """
+    Tests for the shared row hash
+    """
+
+    def test_matches_hashing_each_row_as_text(self):
+        """Same hashes as '|'.join(str(x) for x in row), whatever the dtype,
+        so a download's row hashes do not change with how they are built."""
+        import hashlib
+
+        import numpy
+
+        from immvoke.Sources.Specificity.RowHash import rowHashes
+
+        frame = pandas.DataFrame({
+            'a': [1, None, 3], 'b': [1.0, numpy.nan, 2.5], 'c': [True, False, None],
+            'd': pandas.array([1, None, 3], dtype='Int64'),
+            'e': pandas.array([True, None, False], dtype='boolean'),
+            'f': ['x', '', None]})
+        expected = [hashlib.sha256('|'.join(str(x) for x in row).encode('utf-8'))
+                    .hexdigest()[:12] for row in frame.itertuples(index=False)]
+
+        self.assertEqual(rowHashes(frame).tolist(), expected)
+
+    def test_empty_frame(self):
+        from immvoke.Sources.Specificity.RowHash import rowHashes
+
+        frame = pandas.DataFrame({'a': []}, index=pandas.Index([], dtype=int))
+        self.assertEqual(len(rowHashes(frame)), 0)
