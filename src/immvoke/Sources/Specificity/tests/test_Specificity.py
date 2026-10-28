@@ -577,5 +577,5 @@ class TestIedbAirrExport(unittest.TestCase):
                 Cli.handleSpecificityDownload(args)
 
             self.assertFalse((Path(outdir) / 'iedb' / 'raw').exists())
-            self.assertTrue((Path(outdir) / 'iedb' / 'bcr.tsv').exists())
+            self.assertTrue((Path(outdir) / 'iedb' / 'iedb_bcr.tsv').exists())
             self.assertTrue((Path(outdir) / 'iedb' / 'download_metadata.yml').exists())

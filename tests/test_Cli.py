@@ -305,7 +305,8 @@ class TestHandleSpecificityDownload(unittest.TestCase):
 
             written = sorted(str(p.relative_to(tmp)) for p in Path(tmp).rglob('*')
                              if p.is_file())
-        self.assertEqual(written, ['fakedb/download_metadata.yml', 'fakedb/paired.tsv',
+        self.assertEqual(written, ['fakedb/download_metadata.yml',
+                                   'fakedb/fakedb_paired.tsv',
                                    'fakedb/raw/' + StubSource.unit.unit_id])
 
 

@@ -383,13 +383,13 @@ class TestAnnotateSpecificity(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             database = Path(tmp) / 'databases' / 'iedb'
             database.mkdir(parents=True)
-            airr([heavy('ref1', 'CARDYW')]).to_csv(database / 'bcr.tsv', sep='\t',
-                                                    index=False)
+            airr([heavy('ref1', 'CARDYW')]).to_csv(database / 'iedb_bcr.tsv',
+                                                    sep='\t', index=False)
             (database / 'download_metadata.yml').write_text(yaml.safe_dump(
                 {'source': 'iedb', 'runs': [{'finished': '2026-10-14T17:52:12Z'}]}))
 
-            annotateSpecificity(frame([heavy('q1', 'CARDYW')]), database / 'bcr.tsv',
-                                outdir=Path(tmp) / 'run')
+            annotateSpecificity(frame([heavy('q1', 'CARDYW')]),
+                                database / 'iedb_bcr.tsv', outdir=Path(tmp) / 'run')
 
             run = Path(tmp) / 'run'
             self.assertEqual(sorted(p.name for p in run.iterdir()),

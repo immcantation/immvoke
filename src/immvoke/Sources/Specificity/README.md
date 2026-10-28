@@ -30,7 +30,7 @@ kept as is -- one
 rearrangement record per chain, linked by `cell_id`,
 built from IEDB's calculated (IMGT standardized) gene calls and CDRs, with
 the epitope and assay context (`iedb_epitope_name`, `iedb_assay_ids`, ...)
-alongside -- and writes it with a `bcr.airr_validation.log` report next to it.
+alongside -- and writes it as `iedb_bcr.tsv` with an `iedb_bcr.airr_validation.log` report next to it.
 
 ```bash
 immvoke specificity iedb download bcr --air_species "Homo sapiens" \
@@ -43,20 +43,19 @@ more databases can share one outdir without mixing their files:
 ```
 databases/
 └── iedb/
-    ├── bcr.tsv                  # the reference table for annotate
-    ├── bcr.airr_validation.log  # AIRR validation report
-    ├── download_metadata.yml    # source, license, citation, when, command
-    └── raw/                     # IEDB's airr_full.zip and the file taken from it
+    ├── iedb_bcr.tsv                  # the reference table for annotate
+    ├── iedb_bcr.airr_validation.log  # AIRR validation report
+    └── download_metadata.yml         # source, license, citation, when, command
 ```
 
-The written `databases/iedb/bcr.tsv` keeps every column IEDB provides and
+The written `databases/iedb/iedb_bcr.tsv` keeps every column IEDB provides and
 always carries every field the AIRR schema requires; one IEDB lacks is
 written blank.
 
 ## Annotate
 
 `immvoke annotate` matches a query AIRR table -- your own receptors --
-against a reference AIRR table, such as the `databases/iedb/bcr.tsv`
+against a reference AIRR table, such as the `databases/iedb/iedb_bcr.tsv`
 downloaded above, and reports which reference rows each query row matches.
 The reference must be an AIRR rearrangement table; see
 [idea.md](idea.md#input-contract) for exactly what that requires. From
@@ -86,29 +85,29 @@ so `VJ` is usually what you want there.
 
 ```bash
 # exact CDR3 match
-immvoke annotate --query mine.tsv --reference databases/iedb/bcr.tsv \
+immvoke annotate --query mine.tsv --reference databases/iedb/iedb_bcr.tsv \
     --outdir annotation/exact
 
 # exact full VDJ match within the same V- and J-gene
-immvoke annotate --query mine.tsv --reference databases/iedb/bcr.tsv \
+immvoke annotate --query mine.tsv --reference databases/iedb/iedb_bcr.tsv \
     --sequence-region VDJ --partition-by VJ --outdir annotation/vdj_exact
 
 # same V+J gene, CDR3 at 85% amino acid identity (Hamming distance)
-immvoke annotate --query mine.tsv --reference databases/iedb/bcr.tsv \
+immvoke annotate --query mine.tsv --reference databases/iedb/iedb_bcr.tsv \
     --partition-by VJ --identity-threshold 0.85 --outdir annotation/hamming_0.85
 
 # CDR1-3 pooled at 90% identity, same V-gene, J-gene and CDR3 length
-immvoke annotate --query mine.tsv --reference databases/iedb/bcr.tsv \
+immvoke annotate --query mine.tsv --reference databases/iedb/iedb_bcr.tsv \
     --sequence-region CDRs --partition-by VJL --identity-threshold 0.9 \
     --outdir annotation/cdrs_0.9
 
 # CDR3 at 90% identity allowing insertions/deletions
-immvoke annotate --query mine.tsv --reference databases/iedb/bcr.tsv \
+immvoke annotate --query mine.tsv --reference databases/iedb/iedb_bcr.tsv \
     --partition-by VJ --identity-threshold 0.9 --distance-metric levenshtein \
     --outdir annotation/levenshtein_0.9
 
 # paired heavy+light match
-immvoke annotate --query mine.tsv --reference databases/iedb/bcr.tsv \
+immvoke annotate --query mine.tsv --reference databases/iedb/iedb_bcr.tsv \
     --paired --outdir annotation/paired
 ```
 

@@ -25,8 +25,10 @@ Specificity:
   ``immvoke specificity ... download``'s own flags (``--dry_run``,
   ``--no_resume``, ``--strict_airr``).
 + Each specificity download lands in its database's own folder,
-  ``<outdir>/<db>/``: the normalized ``<table>.tsv``, ``raw/`` and its own
-  ``download_metadata.yml``.
+  ``<outdir>/<db>/``: the normalized ``<db>_<table>.tsv`` (e.g.
+  ``iedb/iedb_bcr.tsv``) and its own ``download_metadata.yml``; IEDB's
+  ``raw/`` (the bulk ZIP and what was taken from it) is deleted once the
+  tables are written.
 + Added ``immvoke annotate``, to annotate a query AIRR table against a
   reference one (e.g. IEDB's BCR table) through symscan_: the heavy chain
   CDR3, full VDJ or pooled CDR1-3 (``--sequence-region``), within the same

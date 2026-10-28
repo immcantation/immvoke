@@ -469,9 +469,10 @@ def _addSpecificityParser(commands, name, source):
             else:
                 leaf.add_argument('--outdir', type=Path, required=True,
                                   help='directory to write into, one '
-                                       'folder per database: <db>/<table>.tsv '
-                                       'is the normalized table, <db>/raw/ '
-                                       'mirrors the upstream file(s)')
+                                       'folder per database: '
+                                       '<db>/<db>_<table>.tsv is the '
+                                       'normalized table, <db>/raw/ mirrors '
+                                       'the upstream file(s)')
                 leaf.add_argument('--dry_run', action='store_true',
                                   help='report what would be fetched, then stop')
                 leaf.add_argument('--no_resume', action='store_true',
@@ -1047,7 +1048,9 @@ def handleSpecificityDownload(args):
             result = source.fetchUnit(unit, raw_dir, resume=not args.no_resume)
             _, chunks, report = source.convertUnit(result.path, unit)
 
-            dest = outdir / ('%s.tsv' % table)
+            # Named after the database as well as the table, so the file
+            # says where it came from once copied out of <db>/.
+            dest = outdir / ('%s_%s.tsv' % (args.db, table))
             if table in source.airr_collections:
                 validation = Convert.writeAirr(chunks, dest,
                                                strict=args.strict_airr)

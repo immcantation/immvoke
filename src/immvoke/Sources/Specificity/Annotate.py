@@ -752,14 +752,17 @@ def _outputPrefix(reference, source):
 
     Returns:
       str: '<db>_<table>' (e.g. 'iedb_bcr') for a table `immvoke
-      specificity` downloaded, the table read off its file name; the file
+      specificity` downloaded, read off its file name (iedb_bcr.tsv), with
+      the database added when the name lacks it (an older bcr.tsv); the file
       name alone for any other reference file; 'reference' for a DataFrame.
     """
     if isinstance(reference, pandas.DataFrame):
         return 'reference'
     table = Path(reference).name.split('.')[0]
+    if not source or table.startswith(source + '_'):
+        return table
 
-    return '%s_%s' % (source, table) if source else table
+    return '%s_%s' % (source, table)
 
 
 def _writeOutputs(outdir, prefix, result, pairs, metadata):

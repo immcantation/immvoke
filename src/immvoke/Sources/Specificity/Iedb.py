@@ -355,7 +355,7 @@ class IedbSource(SourceBase):
     }
     airr_collections = _BULK_TABLES
     #: The raw mirror (the bulk ZIP and the tables extracted from it) is
-    #: deleted once bcr.tsv, tcr.tsv and the rest are written.
+    #: deleted once iedb_bcr.tsv, iedb_tcr.tsv and the rest are written.
     keep_raw = False
 
     #: TODO: confirm exact license wording against https://www.iedb.org/about
