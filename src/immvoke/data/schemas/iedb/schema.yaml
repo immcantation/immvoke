@@ -137,16 +137,3 @@ collections:
       values:
       - Positive
       - Negative
-  bcell:
-    fields:
-    - name: outcome
-      wildcard: '*'
-      pseudo_values: false
-      values:
-      - Positive
-      - Positive-High
-      - Positive-Intermediate
-      - Positive-Low
-      - Negative
-  bcr_to_bcell:
-    fields: []

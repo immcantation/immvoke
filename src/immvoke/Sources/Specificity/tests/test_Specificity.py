@@ -20,11 +20,7 @@ from immvoke.Exceptions import HttpError, IedbParseError
 from immvoke.Http import HttpClient
 from immvoke.Sources.Base import DataUnit, Query
 from immvoke.Sources.Specificity import REGISTRY, getSpecificitySource
-from immvoke.Sources.Specificity.Iedb import (
-    API_BASE,
-    BULK_URL,
-    IedbSource,
-)
+from immvoke.Sources.Specificity.Iedb import BULK_URL, IedbSource
 from immvoke.Sources.Specificity.Paginate import pageByRange
 from tests.FakeHttp import FakeResponse, FakeSession, rangeHandler
 
@@ -156,12 +152,15 @@ class TestIedbSource(unittest.TestCase):
             self.assertEqual(len(units), 1)
             self.assertEqual(units[0].collection, table)
 
-        bcr = source.searchUnits(Query(collection='bcr', filters={}))[0]
+        bcr = source.searchUnits(
+            Query(collection='bcr', filters={'outcome': 'Positive'}))[0]
         self.assertEqual(bcr.url, BULK_URL)
-        bcell = source.searchUnits(
-            Query(collection='bcell', filters={'outcome': 'Positive'}))[0]
-        self.assertEqual(bcell.url, API_BASE + '/bcell_search')
-        self.assertEqual(bcell.metadata, {'outcome': 'Positive'})
+        self.assertEqual(bcr.metadata, {'outcome': 'Positive'})
+
+    def test_only_the_receptor_tables_are_offered(self):
+        """IEDB's B-cell assay tables are not offered: each receptor record
+        already carries its epitope, assay ids and outcome."""
+        self.assertEqual(IedbSource.collections, ('bcr', 'tcr'))
 
     def test_fetch_unit_extracts_the_right_member_from_the_shared_zip(self):
         """bcr and tcr are both members of one AIRR ZIP, extracted by name."""
@@ -190,72 +189,6 @@ class TestIedbSource(unittest.TestCase):
             with self.assertRaises(IedbParseError):
                 source.fetchUnit(unit, Path(outdir))
 
-    def test_fetch_unit_pages_the_api_and_writes_json(self):
-        client = makeClient(itemRangeHandler([[{'receptor_group_id': 1,
-                                               'bcell_id': 2}]]))
-        source = IedbSource(client)
-        unit = DataUnit(unit_id='bcr_to_bcell.json', collection='bcr_to_bcell',
-                       url=API_BASE + '/bcr_to_bcell')
-
-        with tempfile.TemporaryDirectory() as outdir:
-            result = source.fetchUnit(unit, Path(outdir))
-            written = json.loads(result.path.read_text())
-            self.assertEqual(written, [{'receptor_group_id': 1, 'bcell_id': 2}])
-
-    def test_normalize_chunk_adds_provenance_columns(self):
-        source = IedbSource(makeClient(lambda *a: FakeResponse(200)))
-        unit = DataUnit(unit_id='bcr_to_bcell.json', collection='bcr_to_bcell',
-                       url=API_BASE + '/bcr_to_bcell', metadata={})
-        chunk = pandas.DataFrame([{'receptor_group_id': 1, 'bcell_id': 2}])
-        report = {'rows_in': 0, 'rows_out': 0}
-
-        frame = source.normalizeChunk({}, chunk, unit, 0, report)
-
-        self.assertEqual(frame['immvoke_source'].tolist(), ['iedb'])
-        self.assertEqual(frame['immvoke_collection'].tolist(), ['bcr_to_bcell'])
-        self.assertEqual(frame['immvoke_unit_id'].tolist(), ['bcr_to_bcell.json'])
-        self.assertEqual(len(frame['immvoke_row_hash'].iloc[0]), 12)
-        self.assertEqual(report['rows_in'], 1)
-        self.assertEqual(report['rows_out'], 1)
-
-    def test_normalize_chunk_applies_the_outcome_filter(self):
-        """
-        bcell_search has no server side filter for qualitative_measure, so
-        --outcome is applied client side during normalization, matching the
-        grade exactly: Positive does not take in Positive-High.
-        """
-        source = IedbSource(makeClient(lambda *a: FakeResponse(200)))
-        unit = DataUnit(unit_id='bcell_search.json', collection='bcell',
-                       url=API_BASE + '/bcell_search',
-                       metadata={'outcome': 'Positive'})
-        chunk = pandas.DataFrame([
-            {'qualitative_measure': 'Positive'},
-            {'qualitative_measure': 'Negative'},
-            {'qualitative_measure': 'Positive-High'},
-        ])
-        report = {'rows_in': 0, 'rows_out': 0}
-
-        frame = source.normalizeChunk({}, chunk, unit, 0, report)
-
-        self.assertEqual(frame['qualitative_measure'].tolist(), ['Positive'])
-        self.assertEqual(report['rows_in'], 3)
-        self.assertEqual(report['rows_out'], 1)
-
-    def test_normalize_chunk_keeps_everything_for_the_wildcard(self):
-        source = IedbSource(makeClient(lambda *a: FakeResponse(200)))
-        unit = DataUnit(unit_id='bcell_search.json', collection='bcell',
-                       url=API_BASE + '/bcell_search',
-                       metadata={'outcome': '*'})
-        chunk = pandas.DataFrame([
-            {'qualitative_measure': 'Positive'},
-            {'qualitative_measure': 'Negative'},
-        ])
-
-        frame = source.normalizeChunk({}, chunk, unit, 0,
-                                      {'rows_in': 0, 'rows_out': 0})
-
-        self.assertEqual(len(frame), 2)
-
     def test_read_unit_bulk_reads_the_airr_tsv_as_text(self):
         """Blank cells stay '' rather than NaN, and nothing turns numeric."""
         source = IedbSource(makeClient(lambda *a: FakeResponse(200)))
@@ -275,21 +208,6 @@ class TestIedbSource(unittest.TestCase):
         self.assertEqual(frame['cdr3_aa'].tolist(), ['ARDYW'])
         self.assertEqual(frame['iedb_assay_ids'].tolist(), ['32'])
         self.assertEqual(frame['j_call'].tolist(), [''])
-
-    def test_read_unit_api_json(self):
-        source = IedbSource(makeClient(lambda *a: FakeResponse(200)))
-        unit = DataUnit(unit_id='bcr_to_bcell.json', collection='bcr_to_bcell',
-                       url=API_BASE + '/bcr_to_bcell')
-
-        with tempfile.TemporaryDirectory() as outdir:
-            path = Path(outdir) / 'bcr_to_bcell.json'
-            path.write_text(json.dumps([{'receptor_group_id': 1, 'bcell_id': 2}]))
-            metadata, chunks = source.readUnit(path, unit)
-            frame = pandas.concat(list(chunks), ignore_index=True)
-
-        self.assertEqual(metadata, {})
-        self.assertEqual(frame.to_dict('records'),
-                         [{'receptor_group_id': 1, 'bcell_id': 2}])
 
 
 class TestIedbAirrExport(unittest.TestCase):
@@ -396,6 +314,9 @@ class TestIedbAirrExport(unittest.TestCase):
 
         kept, _ = self._normalize(frame, outcome='Negative')
         self.assertEqual(kept['sequence_id'].tolist(), ['2_1'])
+
+        kept, _ = self._normalize(frame, outcome='*')
+        self.assertEqual(len(kept), 3)
 
         kept, report = self._normalize(frame, air_species='Homo sapiens',
                                        outcome='Positive')

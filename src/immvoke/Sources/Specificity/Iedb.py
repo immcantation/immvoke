@@ -1,11 +1,11 @@
 """
-IEDB - B-cell/antibody receptor sequences and assay annotations
+IEDB - B-cell and T-cell receptor sequences with their epitopes and assays
 
 IEDB (https://www.iedb.org/) publishes receptor sequences as a single bulk
-ZIP export and assay data through a PostgREST API
-(https://query-api.iedb.org/api/v1). A table is not an index into many
-separately downloadable files: the table itself *is* the data unit, so each
-table produces exactly one DataUnit.
+ZIP export; its PostgREST API (https://query-api.iedb.org/api/v1) is used
+only to look up the antigen organisms of those receptors' epitopes. A table
+is not an index into many separately downloadable files: the table itself
+*is* the data unit, so each table produces exactly one DataUnit.
 
 IEDB has no HTML search form to scrape, so harvestSchema returns a hand
 curated snapshot rather than one built from a live page.
@@ -17,9 +17,9 @@ and carrying the epitope and assay context alongside. They are already AIRR,
 so normalizeChunk passes them through, adding only provenance columns. Every
 receptor species is kept unless --air_species names one (see
 RECEPTOR_SPECIES and _speciesCells), and every antigen unless
---antigen_species names its organism (see _antigenEpitopes).
-bcell and bcr_to_bcell carry no sequences -- one is assay results, the other
-a join table -- so they keep their own column names.
+--antigen_species names its organism (see _antigenEpitopes). Each record
+already carries its epitope, assay ids and outcome, so IEDB's separate
+B-cell assay tables (bcell_search, bcr_to_bcell) are not offered.
 """
 
 # Info
@@ -28,7 +28,6 @@ __author__ = 'Pramod Shinde'
 # Imports
 import difflib
 import hashlib
-import json
 import logging
 import zipfile
 from datetime import UTC
@@ -54,17 +53,11 @@ BULK_ZIP = 'airr_full.zip'
 #: Rows requested per page from the PostgREST API.
 API_PAGE_SIZE = 2000
 
-#: table -> (unit_id, url). bcr and tcr are members of one AIRR bulk ZIP;
-#: bcell and bcr_to_bcell are each their own API endpoint.
-_TABLE_SOURCE = {
-    'bcr': ('bcr_full_airr.tsv', BULK_URL),
-    'tcr': ('tcr_full_airr.tsv', BULK_URL),
-    'bcell': ('bcell_search.json', API_BASE + '/bcell_search'),
-    'bcr_to_bcell': ('bcr_to_bcell.json', API_BASE + '/bcr_to_bcell'),
+#: table -> its member of the AIRR bulk ZIP.
+_TABLE_MEMBER = {
+    'bcr': 'bcr_full_airr.tsv',
+    'tcr': 'tcr_full_airr.tsv',
 }
-
-#: Tables served from the shared AIRR bulk ZIP rather than the API.
-_BULK_TABLES = frozenset(['bcr', 'tcr'])
 
 #: The receptor species IEDB's AIRR export records in `locus_species`, as
 #: NCBI taxon code -> (name, parent code). Names are IEDB's own
@@ -128,20 +121,10 @@ RECEPTOR_SPECIES = {
 #: --air_species's vocabulary: every name in RECEPTOR_SPECIES, sorted.
 _AIR_SPECIES = tuple(sorted(name for name, _ in RECEPTOR_SPECIES.values()))
 
-#: --outcome's vocabulary per table, and the IEDB column it filters on. The
-#: AIRR export writes only positive or negative, in lower case; bcell_search's
-#: qualitative_measure has the finer grades. Neither has a server-side
-#: filter, so --outcome is applied client-side, case-insensitively, after
-#: fetching; an exact match, so 'Positive' on bcell does not take in
-#: 'Positive-High' and the rest.
+#: --outcome's vocabulary. The AIRR export writes iedb_assay_outcome as
+#: positive or negative, in lower case, so --outcome matches it ignoring
+#: case.
 _RECEPTOR_OUTCOMES = ('Positive', 'Negative')
-_QUALITATIVE_MEASURES = ('Positive', 'Positive-High', 'Positive-Intermediate',
-                         'Positive-Low', 'Negative')
-_OUTCOME_COLUMN = {
-    'bcr': 'iedb_assay_outcome',
-    'tcr': 'iedb_assay_outcome',
-    'bcell': 'qualitative_measure',
-}
 
 #: --antigen_species takes any antigen organism name IEDB uses, so the schema
 #: carries only these as examples (see Field.open_values).
@@ -343,19 +326,17 @@ class IedbSource(SourceBase):
     """
 
     name = 'iedb'
-    description = ('IEDB: curated B-cell/antibody receptor sequences and '
-                   'assay annotations')
+    description = ('IEDB: curated B-cell and T-cell receptor sequences with '
+                   'their epitopes and assays')
     homepage = 'https://www.iedb.org/'
-    collections = ('bcr', 'tcr', 'bcell', 'bcr_to_bcell')
+    collections = ('bcr', 'tcr')
     collection_help = {
         'bcr': 'BCR (antibody) receptor sequences, from the AIRR bulk export',
         'tcr': 'TCR receptor sequences, from the same AIRR bulk export',
-        'bcell': 'B-cell assay records: antigen, epitope and qualitative outcome',
-        'bcr_to_bcell': 'join table linking BCR receptor groups to B-cell assay records',
     }
-    airr_collections = _BULK_TABLES
+    airr_collections = frozenset(collections)
     #: The raw mirror (the bulk ZIP and the tables extracted from it) is
-    #: deleted once iedb_bcr.tsv, iedb_tcr.tsv and the rest are written.
+    #: deleted once iedb_bcr.tsv and iedb_tcr.tsv are written.
     keep_raw = False
 
     #: TODO: confirm exact license wording against https://www.iedb.org/about
@@ -394,10 +375,6 @@ class IedbSource(SourceBase):
         collections = {
             'bcr': Collection(name='bcr', fields=receptor_fields),
             'tcr': Collection(name='tcr', fields=receptor_fields),
-            'bcell': Collection(name='bcell', fields=(
-                Field(name='outcome', values=_QUALITATIVE_MEASURES),
-            )),
-            'bcr_to_bcell': Collection(name='bcr_to_bcell'),
         }
 
         return SourceSchema(
@@ -421,31 +398,11 @@ class IedbSource(SourceBase):
         Returns:
           list: a single DataUnit.
         """
-        unit_id, url = _TABLE_SOURCE[query.collection]
-
-        return [DataUnit(unit_id=unit_id, collection=query.collection, url=url,
+        return [DataUnit(unit_id=_TABLE_MEMBER[query.collection],
+                         collection=query.collection, url=BULK_URL,
                          metadata=dict(query.filters))]
 
     def fetchUnit(self, unit, outdir, resume=True, progress=True):
-        """
-        Download one table.
-
-        Arguments:
-          unit (DataUnit): what to fetch.
-          outdir (Path): the mirror root.
-          resume (bool): continue an interrupted transfer if possible.
-          progress (bool): show a progress bar.
-
-        Returns:
-          DownloadResult: the outcome.
-        """
-        if unit.collection in _BULK_TABLES:
-            return self._fetchFromBulkZip(unit, outdir, resume=resume,
-                                          progress=progress)
-
-        return self._fetchFromApi(unit, outdir)
-
-    def _fetchFromBulkZip(self, unit, outdir, resume=True, progress=True):
         """
         Fetch the shared AIRR bulk ZIP and extract one table from it.
 
@@ -476,79 +433,47 @@ class IedbSource(SourceBase):
         return DownloadResult(unit=unit, path=dest, sha256=hashFile(dest),
                               size_bytes=dest.stat().st_size)
 
-    def _fetchFromApi(self, unit, outdir):
-        """
-        Page the PostgREST API for one table and write it as JSON.
-
-        Arguments:
-          unit (DataUnit): the bcell or bcr_to_bcell table.
-          outdir (Path): the mirror root.
-
-        Returns:
-          DownloadResult: the outcome.
-        """
-        records = []
-        for batch in pageByRange(self.client, unit.url, page_size=API_PAGE_SIZE):
-            records.extend(batch)
-
-        dest = self.resolveOutputPath(unit, outdir)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(json.dumps(records))
-
-        return DownloadResult(unit=unit, path=dest, sha256=hashFile(dest),
-                              size_bytes=dest.stat().st_size)
-
     def readUnit(self, path, unit, chunksize=50000):
         """
         Open a downloaded table.
 
         Arguments:
-          path (Path): the downloaded file.
+          path (Path): the downloaded AIRR TSV.
           unit (DataUnit): what it is.
-          chunksize (int): rows per chunk, for the AIRR TSV tables. The
-            JSON tables are modest enough to read as a single chunk.
+          chunksize (int): rows per chunk.
 
         Returns:
-          tuple: (metadata, iterator of raw record chunks). IEDB tables carry
-          no per-unit metadata line; for bcr and tcr, metadata holds
+          tuple: (metadata, iterator of raw record chunks). metadata holds
           `kept_cells`, the receptors normalizeChunk keeps (see
           _speciesCells), and `kept_epitopes`, the epitopes it keeps (see
           _antigenEpitopes); each is None to keep everything when its
-          filter (--air_species, --antigen_species) was not given. bcr and
-          tcr are read as text, blank cells as '' rather than NaN.
+          filter (--air_species, --antigen_species) was not given. The table
+          is read as text, blank cells as '' rather than NaN.
         """
-        if unit.collection in _BULK_TABLES:
-            filters = unit.metadata or {}
-            species = filters.get('air_species')
-            antigen = filters.get('antigen_species')
-            metadata = {
-                'kept_cells': (None if not species or species == '*'
-                               else _speciesCells(path, chunksize,
-                                                  _speciesCodes(species))),
-                'kept_epitopes': (None if not antigen or antigen == '*'
-                                  else _antigenEpitopes(self.client, path,
-                                                        chunksize, antigen)),
-            }
-            return metadata, pandas.read_csv(path, sep='\t', dtype=str,
-                                             na_filter=False, chunksize=chunksize)
+        filters = unit.metadata or {}
+        species = filters.get('air_species')
+        antigen = filters.get('antigen_species')
+        metadata = {
+            'kept_cells': (None if not species or species == '*'
+                           else _speciesCells(path, chunksize,
+                                              _speciesCodes(species))),
+            'kept_epitopes': (None if not antigen or antigen == '*'
+                              else _antigenEpitopes(self.client, path,
+                                                    chunksize, antigen)),
+        }
 
-        with open(path) as handle:
-            records = json.load(handle)
-
-        return {}, iter([pandas.DataFrame.from_records(records)])
+        return metadata, pandas.read_csv(path, sep='\t', dtype=str,
+                                         na_filter=False, chunksize=chunksize)
 
     def normalizeChunk(self, metadata, chunk, unit, offset, report):
         """
-        Normalize a chunk, applying provenance and any filter the fetch step
-        could not apply server-side.
+        Normalize a chunk, applying provenance and the filters.
 
         bcr and tcr are already AIRR rearrangement records, one per chain,
-        and pass through unchanged; so do bcell and bcr_to_bcell's own
-        columns, filtered where the fetch step could not filter.
+        and pass through unchanged, less the rows the filters drop.
 
         Arguments:
-          metadata (dict): from readUnit; for bcr and tcr, `kept_cells` and
-            `kept_epitopes`.
+          metadata (dict): from readUnit: `kept_cells` and `kept_epitopes`.
           chunk (pandas.DataFrame): raw records, IEDB's own columns.
           unit (DataUnit): what they came from.
           offset (int): unused; kept for interface parity with SourceBase.
@@ -558,18 +483,17 @@ class IedbSource(SourceBase):
           pandas.DataFrame: the normalized chunk, with provenance columns
           added.
         """
-        if unit.collection in _BULK_TABLES:
-            report['rows_in'] += len(chunk)
-            frame = chunk
-            if metadata['kept_cells'] is not None:
-                frame = frame[frame['cell_id'].isin(metadata['kept_cells'])]
-            if metadata['kept_epitopes'] is not None:
-                frame = frame[frame['reactivity_ref'].isin(metadata['kept_epitopes'])]
-            frame = self._applyClientFilter(frame, unit)
-            report['rows_out'] += len(frame)
-            frame = coerceAirrTypes(frame.copy())
-        else:
-            frame = self._normalizeAssayChunk(chunk, unit, report)
+        report['rows_in'] += len(chunk)
+        frame = chunk
+        if metadata['kept_cells'] is not None:
+            frame = frame[frame['cell_id'].isin(metadata['kept_cells'])]
+        if metadata['kept_epitopes'] is not None:
+            frame = frame[frame['reactivity_ref'].isin(metadata['kept_epitopes'])]
+        outcome = (unit.metadata or {}).get('outcome')
+        if outcome and outcome != '*':
+            frame = frame[frame['iedb_assay_outcome'].str.lower() == outcome.lower()]
+        report['rows_out'] += len(frame)
+        frame = coerceAirrTypes(frame.copy())
 
         # apply(..., axis=1) on an empty frame cannot infer a row shape, so it
         # is skipped rather than trusted to return an empty result.
@@ -585,44 +509,3 @@ class IedbSource(SourceBase):
         frame['immvoke_row_hash'] = row_hash
 
         return frame
-
-    def _normalizeAssayChunk(self, chunk, unit, report):
-        """
-        Pass an assay or join table chunk's columns through unchanged,
-        applying any filter the fetch step could not apply server-side.
-
-        Arguments:
-          chunk (pandas.DataFrame): raw records, IEDB's own columns.
-          unit (DataUnit): what they came from.
-          report (dict): counters to accumulate into.
-
-        Returns:
-          pandas.DataFrame: the filtered chunk.
-        """
-        report['rows_in'] += len(chunk)
-
-        frame = self._applyClientFilter(chunk, unit)
-
-        report['rows_out'] += len(frame)
-
-        return frame
-
-    def _applyClientFilter(self, frame, unit):
-        """
-        Apply --outcome, which neither the AIRR export nor bcell_search can
-        filter on itself (see _OUTCOME_COLUMN).
-
-        Arguments:
-          frame (pandas.DataFrame): raw records for one chunk.
-          unit (DataUnit): the table, carrying the resolved filters.
-
-        Returns:
-          pandas.DataFrame: the filtered chunk, or the chunk unchanged for
-          tables and filters this does not apply to.
-        """
-        wanted = (unit.metadata or {}).get('outcome')
-        column = _OUTCOME_COLUMN.get(unit.collection)
-        if not wanted or wanted == '*' or column not in frame.columns:
-            return frame
-
-        return frame[frame[column].str.lower() == wanted.lower()]

@@ -14,8 +14,9 @@ Specificity:
   species kept unless ``--air_species`` names one (e.g. ``--air_species
   "Homo sapiens"``; a species includes its strains), and every assay
   outcome unless ``--outcome`` names one (``Positive`` or ``Negative``).
-  ``--outcome`` also replaces ``--qualitative_measure`` on IEDB's ``bcell``
-  table, keeping its finer grades (``Positive-High``, ...).
+  IEDB's B-cell assay tables (``bcell``, ``bcr_to_bcell``) are not
+  offered: each receptor record already carries its epitope, assay ids and
+  outcome.
   ``--antigen_species`` keeps receptors whose epitope comes from an antigen
   organism, by any name IEDB uses, ignoring case (``--antigen_species
   "Influenza A virus"`` takes in every flu strain); it asks IEDB's API for
