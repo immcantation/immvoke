@@ -17,7 +17,9 @@ Specificity:
   ``--outcome`` also replaces ``--qualitative_measure`` on IEDB's ``bcell``
   table, keeping its finer grades (``Positive-High``, ...).
 + Filter flags generated from a source's schema are spelled with
-  underscores, as the field is (``--air_species``).
+  underscores, as the field is (``--air_species``), and so are
+  ``immvoke specificity ... download``'s own flags (``--dry_run``,
+  ``--no_resume``, ``--strict_airr``).
 + Each specificity download lands in its database's own folder,
   ``<outdir>/<db>/``: the normalized ``<table>.tsv``, ``raw/`` and its own
   ``download_metadata.yml``.

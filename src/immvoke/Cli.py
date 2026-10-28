@@ -469,12 +469,12 @@ def _addSpecificityParser(commands, name, source):
                                        'folder per database: <db>/<table>.tsv '
                                        'is the normalized table, <db>/raw/ '
                                        'mirrors the upstream file(s)')
-                leaf.add_argument('--dry-run', action='store_true',
+                leaf.add_argument('--dry_run', action='store_true',
                                   help='report what would be fetched, then stop')
-                leaf.add_argument('--no-resume', action='store_true',
+                leaf.add_argument('--no_resume', action='store_true',
                                   help='re-download in full rather than '
                                        'continuing a partly fetched file')
-                leaf.add_argument('--strict-airr', action='store_true',
+                leaf.add_argument('--strict_airr', action='store_true',
                                   help='for a table written as AIRR, drop '
                                        'columns the AIRR schema does not '
                                        'define; no effect on other tables')
@@ -521,9 +521,9 @@ def _addSpecificityGroupParser(commands):
                                    'subdirectory per database')
     all_download.add_argument('--limit', type=int, default=None,
                               help='stop after this many tables, per database')
-    all_download.add_argument('--dry-run', action='store_true',
+    all_download.add_argument('--dry_run', action='store_true',
                               help='report what would be fetched, then stop')
-    all_download.add_argument('--strict-airr', action='store_true',
+    all_download.add_argument('--strict_airr', action='store_true',
                               help='for a table written as AIRR, drop columns '
                                    'the AIRR schema does not define; no effect '
                                    'on other tables')
