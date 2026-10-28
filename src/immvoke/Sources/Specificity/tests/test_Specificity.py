@@ -7,11 +7,13 @@ __author__ = 'Pramod Shinde'
 
 # Imports
 import json
+import os
 import tempfile
 import unittest
 import zipfile
 from io import BytesIO
 from pathlib import Path
+from unittest import mock
 
 import pandas
 
@@ -129,10 +131,27 @@ def makeZip(members):
     return buffer.getvalue()
 
 
+def isolateCache(test):
+    """
+    Point IEDB's ZIP cache (see Iedb.cacheDir) at a temporary folder for the
+    length of a test, so no test reads or writes the user's own cache.
+    """
+    cache = tempfile.TemporaryDirectory()
+    test.addCleanup(cache.cleanup)
+    patcher = mock.patch.dict(os.environ, {'XDG_CACHE_HOME': cache.name})
+    patcher.start()
+    test.addCleanup(patcher.stop)
+
+    return Path(cache.name) / 'immvoke' / 'iedb'
+
+
 class TestIedbSource(unittest.TestCase):
     """
     Tests for the IEDB specificity source
     """
+
+    def setUp(self):
+        self.cache = isolateCache(self)
 
     def test_registered(self):
         self.assertIs(REGISTRY['iedb'], IedbSource)
@@ -175,9 +194,10 @@ class TestIedbSource(unittest.TestCase):
         with tempfile.TemporaryDirectory() as outdir:
             result = source.fetchUnit(unit, Path(outdir))
             self.assertEqual(result.path.read_text(), 'sequence_id\tlocus\nb1\tIGH\n')
-            # The ZIP itself is cached alongside the extracted table, so a
-            # second table sharing it does not re-download it.
-            self.assertTrue((Path(outdir) / 'airr_full.zip').exists())
+            # The ZIP is kept in the cache, not beside the extracted table, so
+            # a second table or a later search does not re-download it.
+            self.assertTrue((self.cache / 'airr_full.zip').exists())
+            self.assertFalse((Path(outdir) / 'airr_full.zip').exists())
 
     def test_fetch_unit_raises_when_the_zip_member_is_missing(self):
         zip_bytes = makeZip({'tcr_full_airr.tsv': 'sequence_id\nt1\n'})
@@ -214,6 +234,9 @@ class TestIedbAirrExport(unittest.TestCase):
     """
     Tests for the receptor tables, read from IEDB's own AIRR export
     """
+
+    def setUp(self):
+        self.cache = isolateCache(self)
 
     def test_bcr_and_tcr_are_airr_collections(self):
         self.assertEqual(IedbSource.airr_collections, frozenset(['bcr', 'tcr']))

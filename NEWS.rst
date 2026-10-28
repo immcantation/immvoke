@@ -21,6 +21,15 @@ Specificity:
   organism, by any name IEDB uses, ignoring case (``--antigen_species
   "Influenza A virus"`` takes in every flu strain); it asks IEDB's API for
   the organisms of the table's epitopes when the table is downloaded.
++ ``immvoke specificity <db> search <table>`` counts what the table holds
+  once its filters are applied (rows, receptor groups, epitopes and the most
+  common loci, receptor species and outcomes, ``--top`` of each), instead of
+  printing the download URL; ``--out`` writes every count as a TSV. Its and
+  download's filters are grouped in ``--help``, each saying what it filters
+  on, and ``--limit`` is left only on ``download all``, the one place it
+  had an effect.
++ IEDB's bulk ZIP is cached in ``~/.cache/immvoke/iedb/`` for a day, shared
+  by search and download, so ``bcr`` then ``tcr`` fetch it once.
 + Filter flags generated from a source's schema are spelled with
   underscores, as the field is (``--air_species``), and so are
   ``immvoke specificity ... download``'s own flags (``--dry_run``,

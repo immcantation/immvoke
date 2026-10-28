@@ -28,6 +28,8 @@ __author__ = 'Pramod Shinde'
 # Imports
 import difflib
 import logging
+import os
+import time
 import zipfile
 from datetime import UTC
 from pathlib import Path
@@ -47,8 +49,12 @@ log = logging.getLogger(__name__)
 #: Endpoints.
 API_BASE = 'https://query-api.iedb.org/api/v1'
 BULK_URL = 'https://www.iedb.org/downloader.php?file_name=doc/airr_full.zip'
-#: Where the bulk ZIP is cached under the output directory.
+#: The bulk ZIP's file name in the cache (see cacheDir).
 BULK_ZIP = 'airr_full.zip'
+#: Seconds a cached bulk ZIP is reused before it is fetched again. IEDB
+#: refreshes the export weekly and its download sends no Last-Modified or
+#: ETag to check against, so freshness goes by age.
+CACHE_MAX_AGE = 24 * 60 * 60
 
 #: Rows requested per page from the PostgREST API.
 API_PAGE_SIZE = 2000
@@ -305,6 +311,19 @@ def _findZipMember(archive, filename):
         % (filename, BULK_URL))
 
 
+def cacheDir():
+    """
+    Where IEDB's bulk ZIP is cached between runs: $XDG_CACHE_HOME/immvoke/iedb,
+    ~/.cache/immvoke/iedb when that is not set.
+
+    Returns:
+      Path: the cache folder (not created here).
+    """
+    root = os.environ.get('XDG_CACHE_HOME') or Path.home() / '.cache'
+
+    return Path(root) / 'immvoke' / 'iedb'
+
+
 class IedbSource(SourceBase):
     """
     The IEDB specificity source.
@@ -320,9 +339,25 @@ class IedbSource(SourceBase):
         'tcr': 'TCR receptor sequences, from the same AIRR bulk export',
     }
     airr_collections = frozenset(collections)
-    #: The raw mirror (the bulk ZIP and the tables extracted from it) is
-    #: deleted once iedb_bcr.tsv and iedb_tcr.tsv are written.
+    #: The tables extracted from the bulk ZIP are deleted once iedb_bcr.tsv
+    #: and iedb_tcr.tsv are written; the ZIP itself stays in the cache.
     keep_raw = False
+    filter_help = {
+        'air_species': ('SPECIES', "the receptor's species, from each chain's "
+                                   'locus_species; a species includes its '
+                                   'strains'),
+        'antigen_species': ('ORGANISM', 'the organism its epitope comes from: '
+                                        'any name IEDB uses, ignoring case; an '
+                                        'organism includes those under it'),
+        'outcome': ('OUTCOME', 'the assay outcome, iedb_assay_outcome'),
+    }
+    search_columns = dict.fromkeys(collections, (
+        ('iedb_receptor_group', 'receptor groups', 'distinct'),
+        ('reactivity_ref', 'epitopes', 'distinct'),
+        ('locus', 'locus', 'top'),
+        ('locus_species', 'receptor species', 'top'),
+        ('iedb_assay_outcome', 'outcome', 'top'),
+    ))
 
     #: TODO: confirm exact license wording against https://www.iedb.org/about
     #: before this is relied on for redistribution terms.
@@ -387,25 +422,47 @@ class IedbSource(SourceBase):
                          collection=query.collection, url=BULK_URL,
                          metadata=dict(query.filters))]
 
+    def labelValue(self, column, value):
+        """
+        Name a locus_species code as its species (see RECEPTOR_SPECIES), and
+        a blank cell as not recorded.
+
+        Arguments:
+          column (str): the column.
+          value (str): one of its values.
+
+        Returns:
+          str: the label to show.
+        """
+        if value == '':
+            return '(not recorded)'
+        if column == 'locus_species':
+            return RECEPTOR_SPECIES.get(value, (value, None))[0]
+
+        return value
+
     def fetchUnit(self, unit, outdir, resume=True, progress=True):
         """
         Fetch the shared AIRR bulk ZIP and extract one table from it.
 
-        The ZIP is cached at a fixed path under outdir: a rerun with the file
-        already present reuses it (HttpClient.fetch skips a download whose
-        destination already exists), so fetching bcr and then tcr in the same
-        output directory downloads the ZIP only once.
+        The ZIP is kept in the user's cache (see cacheDir), not under outdir,
+        so download and search share it, and fetching bcr and then tcr
+        downloads it only once. It is reused for CACHE_MAX_AGE, then fetched
+        again.
 
         Arguments:
           unit (DataUnit): the bcr or tcr table.
-          outdir (Path): the mirror root.
+          outdir (Path): the mirror root, where the table is extracted to.
           resume (bool): continue an interrupted ZIP transfer if possible.
           progress (bool): show a progress bar for the ZIP transfer.
 
         Returns:
           DownloadResult: the outcome, describing the extracted table file.
         """
-        zip_dest = Path(outdir) / BULK_ZIP
+        zip_dest = cacheDir() / BULK_ZIP
+        if zip_dest.exists() and time.time() - zip_dest.stat().st_mtime > CACHE_MAX_AGE:
+            log.info('%s is over a day old; fetching the current export', zip_dest)
+            zip_dest.unlink()
         self.client.fetch(unit.url, zip_dest, resume=resume, progress=progress)
 
         dest = self.resolveOutputPath(unit, outdir)

@@ -37,6 +37,35 @@ immvoke specificity iedb download bcr --air_species "Homo sapiens" \
     --antigen_species "Influenza A virus" --outcome Positive --outdir databases
 ```
 
+`search` takes the same filters and counts what a download would give,
+writing nothing (unless `--out` asks for the counts as a TSV): rows,
+receptor groups, epitopes, and the most common loci, receptor species and
+outcomes (`--top` of each, 10 by default).
+
+```bash
+immvoke specificity iedb search bcr --air_species "Homo sapiens"
+```
+
+```
+iedb bcr: BCR (antibody) receptor sequences, from the AIRR bulk export
+filters: air_species = Homo sapiens
+
+  rows             10,861 of 18,650
+  receptor groups  3,417
+  epitopes         3,128
+
+  locus
+    5,917  IGH
+    2,920  IGK
+    1,747  IGL
+      277  (not recorded)
+...
+```
+
+IEDB's bulk ZIP is kept in `~/.cache/immvoke/iedb/` (`$XDG_CACHE_HOME` if
+set) for a day, so a search, a download, and `bcr` then `tcr`, share one
+copy; after a day the current export is fetched again.
+
 Every download lands in its database's own folder under `--outdir`, so
 more databases can share one outdir without mixing their files:
 

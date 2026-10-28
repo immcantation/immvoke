@@ -27,6 +27,12 @@ from immvoke.Sources.Specificity import REGISTRY as SPECIFICITY_REGISTRY
 from immvoke.Sources.Specificity import getSpecificitySource
 from immvoke.Sources.Specificity.AnnotateCli import addAnnotateParser, handleAnnotate
 from immvoke.Sources.Specificity.Provenance import writeSpecificityMetadata
+from immvoke.Sources.Specificity.Search import (
+    DEFAULT_TOP,
+    SpecificityHelpFormatter,
+    addFilterGroup,
+    searchTables,
+)
 from immvoke.Version import __date__, __version__
 
 log = logging.getLogger('immvoke')
@@ -65,7 +71,7 @@ def loadSchemaQuietly(name):
         return None
 
 
-def addFilterArgs(parser, schema, source, collection, cap=VALUE_LIST_CAP):
+def addFilterArgs(parser, schema, source, collection):
     """
     Generate one commandline flag per searchable field.
 
@@ -79,9 +85,6 @@ def addFilterArgs(parser, schema, source, collection, cap=VALUE_LIST_CAP):
       schema (SourceSchema): the snapshot, or None if none is installed.
       source (str): the source name, for the `schema show` pointer on overflow.
       collection (str): which collection's fields to add.
-      cap (int): list at most this many values in a flag's help, or None to
-        list them all. Specificity databases pass None: `schema show` does
-        not cover them, so their help is the only place the full list shows.
     """
     if schema is None or collection not in schema.collections:
         return
@@ -92,7 +95,7 @@ def addFilterArgs(parser, schema, source, collection, cap=VALUE_LIST_CAP):
         elif item.open_values:
             summary = ('any name %s uses, checked when fetching, e.g. %s'
                        % (source, ', '.join(item.values)))
-        elif cap is None or len(item.values) <= cap:
+        elif len(item.values) <= VALUE_LIST_CAP:
             summary = '%d values: %s' % (len(item.values), ', '.join(item.values))
         else:
             # Overflow only: today's fields (species, disease, ...) all stay well
@@ -426,13 +429,15 @@ def _addSpecificityParser(commands, name, source):
                                     required=True)
 
     action_help = {
-        'search': ('list what a table contains',
-                   'Resolve a table, optionally narrowed by filters, and '
-                   'print (or save with --out) a summary of it. Nothing is '
-                   'downloaded.'),
+        'search': ('count what a table holds',
+                   'Count what a table holds, optionally narrowed by the '
+                   'filters: its rows and the most common values of its key '
+                   'columns. The table is fetched into a temporary folder and '
+                   'nothing else is written, unless --out asks for the '
+                   'counts.'),
         'download': ('download a table',
-                    'Fetch a table, optionally narrowed by filters, and write '
-                    'it as a raw mirror plus one normalized TSV: a real AIRR '
+                    'Fetch a table, optionally narrowed by the filters, and '
+                    'write it as one normalized TSV: a real AIRR '
                     'rearrangement TSV for a table listed in the database\'s '
                     'airr_collections, a plain TSV of the source\'s own '
                     'columns otherwise.'),
@@ -452,27 +457,27 @@ def _addSpecificityParser(commands, name, source):
             if filter_table is None:
                 summary = 'every table this database offers'
             else:
-                summary = 'the %s table (%s), optionally narrowed down with the filter flags below' % (table_name, table_help)
+                summary = 'the %s table: %s' % (table_name, table_help)
             leaf = tables.add_parser(
                 table_name, help=table_help,
                 description='%s %s.' % (action.capitalize(), summary),
-                formatter_class=CommonHelpFormatter)
+                formatter_class=SpecificityHelpFormatter)
             if filter_table is not None:
-                addFilterArgs(leaf, schema, name, filter_table, cap=None)
-            leaf.add_argument('--limit', type=int, default=None,
-                              help='stop after this many rows'
-                                   if filter_table is not None
-                                   else 'stop after this many tables')
+                addFilterGroup(leaf, schema, source, filter_table)
             if action == 'search':
+                leaf.add_argument('--top', type=int, default=DEFAULT_TOP,
+                                  help='show at most this many values per column')
                 leaf.add_argument('-o', '--out', type=Path, default=None,
-                                  help='write the result to a TSV file')
+                                  help='also write every count to this TSV file')
             else:
+                if filter_table is None:
+                    leaf.add_argument('--limit', type=int, default=None,
+                                      help='stop after this many tables')
                 leaf.add_argument('--outdir', type=Path, required=True,
                                   help='directory to write into, one '
                                        'folder per database: '
                                        '<db>/<db>_<table>.tsv is the '
-                                       'normalized table, <db>/raw/ mirrors '
-                                       'the upstream file(s)')
+                                       'normalized table')
                 leaf.add_argument('--dry_run', action='store_true',
                                   help='report what would be fetched, then stop')
                 leaf.add_argument('--no_resume', action='store_true',
@@ -933,19 +938,20 @@ def _resolveSpecificityTables(source, args):
 
     Arguments:
       source (SourceBase): the specificity source.
-      args (Namespace): parsed arguments, carrying `table` and `limit`.
+      args (Namespace): parsed arguments, carrying `table` and, for
+        `download all`, `limit`.
 
     Returns:
       list: table names. `--limit` caps how many are used when `table` is
-      'all'; for a single named table it has no effect, since that table
-      alone is already the whole selection.
+      'all'; a single named table, and search, take no --limit.
     """
     if args.table != 'all':
         return [args.table]
 
     tables = list(source.collections)
+    limit = getattr(args, 'limit', None)
 
-    return tables[:args.limit] if args.limit is not None else tables
+    return tables[:limit] if limit is not None else tables
 
 
 def _writeSpecificityTsv(chunks, out):
@@ -993,29 +999,11 @@ def handleSpecificityList(args):
 
 
 def handleSpecificitySearch(args):
-    """List what a table (or every table) contains, without downloading."""
-    client = makeClient(args)
-    source = getSpecificitySource(args.db, client)
-    filters = collectFilters(args)
-    tables = _resolveSpecificityTables(source, args)
+    """Count what a table (or every table) holds; see Specificity.Search."""
+    source = getSpecificitySource(args.db, makeClient(args))
 
-    rows = []
-    for table in tables:
-        query = source.validateQuery(table, filters)
-        for unit in source.searchUnits(query):
-            rows.append({'unit_id': unit.unit_id, 'collection': unit.collection,
-                        'url': unit.url})
-
-    log.info('%d table(s)', len(rows))
-    if args.out is not None:
-        Catalog.saveCatalog(rows, args.out,
-                            columns=('unit_id', 'collection', 'url'))
-        log.info('wrote %s', args.out)
-    else:
-        for row in rows:
-            print('%-16s %-24s %s' % (row['collection'], row['unit_id'], row['url']))
-
-    return 0
+    return searchTables(source, _resolveSpecificityTables(source, args),
+                        collectFilters(args), top=args.top, out=args.out)
 
 
 def handleSpecificityDownload(args):
@@ -1082,7 +1070,7 @@ def handleSpecificityDownload(args):
     # replaces the metadata file rather than accumulating old runs into it --
     # see Specificity.Provenance for why that is a separate writer.
     writeSpecificityMetadata(
-        outdir, args.db, args.table, filters, args.limit, records,
+        outdir, args.db, args.table, filters, getattr(args, 'limit', None), records,
         schema=source.schema, license=source.license, citation=source.citation,
         formats=formats_written or ('tsv',))
 
