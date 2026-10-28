@@ -16,6 +16,10 @@ Specificity:
   outcome unless ``--outcome`` names one (``Positive`` or ``Negative``).
   ``--outcome`` also replaces ``--qualitative_measure`` on IEDB's ``bcell``
   table, keeping its finer grades (``Positive-High``, ...).
+  ``--antigen_species`` keeps receptors whose epitope comes from an antigen
+  organism, by any name IEDB uses, ignoring case (``--antigen_species
+  "Influenza A virus"`` takes in every flu strain); it asks IEDB's API for
+  the organisms of the table's epitopes when the table is downloaded.
 + Filter flags generated from a source's schema are spelled with
   underscores, as the field is (``--air_species``), and so are
   ``immvoke specificity ... download``'s own flags (``--dry_run``,

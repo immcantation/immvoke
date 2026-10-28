@@ -104,6 +104,13 @@ class TestValidation(unittest.TestCase):
         with self.assertRaises(SchemaError):
             self.schema.validateFilters('nonesuch', {})
 
+    def test_open_values_accept_anything(self):
+        """An open field's values are examples; the source checks the rest."""
+        field = Field(name='antigen', values=('Influenza A virus',), open_values=True)
+
+        self.assertTrue(field.accepts('Yellow fever virus'))
+        self.assertFalse(Field(name='antigen', values=('x',)).accepts('y'))
+
 
 class TestRoundTrip(unittest.TestCase):
     """
@@ -117,6 +124,19 @@ class TestRoundTrip(unittest.TestCase):
         self.assertEqual(again.collection_names, schema.collection_names)
         self.assertEqual(again.getCollection('unpaired').field_names,
                          ('Species', 'Primer'))
+
+    def test_open_values_round_trip_and_stay_out_of_other_fields(self):
+        schema = SourceSchema(source='demo', collections={
+            'c': Collection(name='c', fields=(
+                Field(name='antigen', values=('a',), open_values=True),
+                Field(name='Species', values=('human',))))})
+
+        payload = toDict(schema)
+        fields = payload['collections']['c']['fields']
+
+        self.assertTrue(fields[0]['open_values'])
+        self.assertNotIn('open_values', fields[1])
+        self.assertTrue(fromDict(payload).getCollection('c').fields[0].open_values)
 
     def test_a_newer_snapshot_is_refused(self):
         """

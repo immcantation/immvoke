@@ -270,7 +270,7 @@ class TestIedbSource(unittest.TestCase):
             metadata, chunks = source.readUnit(path, unit)
             frame = pandas.concat(list(chunks), ignore_index=True)
 
-        self.assertEqual(metadata, {'kept_cells': None})
+        self.assertEqual(metadata, {'kept_cells': None, 'kept_epitopes': None})
         self.assertEqual(list(frame.columns), list(IEDB_AIRR_COLUMNS))
         self.assertEqual(frame['cdr3_aa'].tolist(), ['ARDYW'])
         self.assertEqual(frame['iedb_assay_ids'].tolist(), ['32'])
@@ -309,13 +309,17 @@ class TestIedbAirrExport(unittest.TestCase):
         self.assertEqual(unit.unit_id, 'bcr_full_airr.tsv')
         self.assertTrue(unit.url.endswith('airr_full.zip'))
 
-    def _normalize(self, frame, air_species=None, outcome=None):
+    def _normalize(self, frame, air_species=None, outcome=None,
+                   antigen_species=None, handler=None):
         """Read and normalize `frame` the way `immvoke specificity iedb
-        download bcr` does, from a downloaded TSV, with --air_species and
-        --outcome if given."""
-        source = IedbSource(makeClient(lambda *a: FakeResponse(200)))
+        download bcr` does, from a downloaded TSV, with --air_species,
+        --outcome and --antigen_species if given; `handler` serves IEDB's
+        API."""
+        source = IedbSource(makeClient(handler or (lambda *a: FakeResponse(200))))
         filters = {k: v for k, v in (('air_species', air_species),
-                                     ('outcome', outcome)) if v is not None}
+                                     ('outcome', outcome),
+                                     ('antigen_species', antigen_species))
+                   if v is not None}
         unit = DataUnit(unit_id='bcr_full_airr.tsv', collection='bcr', url=BULK_URL,
                         metadata=filters)
         report = {'rows_in': 0, 'rows_out': 0}
@@ -404,9 +408,70 @@ class TestIedbAirrExport(unittest.TestCase):
         for table in ('bcr', 'tcr'):
             query = source.validateQuery(table, {'air_species': 'Homo sapiens'})
             self.assertEqual(query.filters, {'air_species': 'Homo sapiens',
+                                             'antigen_species': '*',
                                              'outcome': '*'})
         with self.assertRaises(Exception):
             source.validateQuery('bcr', {'air_species': 'human'})
+
+    #: epitope_search records: a flu strain, the flu species itself, a human
+    #: self antigen, and one epitope with two organisms whose name and id
+    #: lists are not in the same order.
+    EPITOPES = [
+        {'structure_id': 1,
+         'source_organism_names': ['Influenza A virus (A/Puerto Rico/8/1934(H1N1))'],
+         'source_organism_iris': ['NCBITaxon:211044'],
+         'source_organism_iri_search': ['NCBITaxon:1', 'NCBITaxon:11320',
+                                        'NCBITaxon:211044']},
+        {'structure_id': 2,
+         'source_organism_names': ['Influenza A virus'],
+         'source_organism_iris': ['NCBITaxon:11320'],
+         'source_organism_iri_search': ['NCBITaxon:1', 'NCBITaxon:11320']},
+        {'structure_id': 3,
+         'source_organism_names': ['Homo sapiens (human)'],
+         'source_organism_iris': ['NCBITaxon:9606'],
+         'source_organism_iri_search': ['NCBITaxon:1', 'NCBITaxon:9606']},
+        {'structure_id': 4,
+         'source_organism_names': ['Borreliella burgdorferi B31',
+                                   'Borreliella burgdorferi'],
+         'source_organism_iris': ['NCBITaxon:139', 'NCBITaxon:224326'],
+         'source_organism_iri_search': ['NCBITaxon:1', 'NCBITaxon:139',
+                                        'NCBITaxon:224326']},
+    ]
+
+    def test_antigen_name_resolves_to_iedb_organism(self):
+        from immvoke.Exceptions import SchemaError
+        from immvoke.Sources.Specificity.Iedb import _resolveAntigen
+
+        # The full name wins over a strain sharing it before the brackets.
+        self.assertEqual(_resolveAntigen('influenza A VIRUS', self.EPITOPES),
+                         ('Influenza A virus', 'NCBITaxon:11320'))
+        # Without the bracketed common name, when that leaves one organism.
+        self.assertEqual(_resolveAntigen('Homo sapiens', self.EPITOPES),
+                         ('Homo sapiens (human)', 'NCBITaxon:9606'))
+        # Names only from an epitope with two organisms cannot be paired.
+        with self.assertRaises(SchemaError):
+            _resolveAntigen('Borreliella burgdorferi', self.EPITOPES)
+        with self.assertRaisesRegex(SchemaError, 'closest IEDB names: Influenza A virus'):
+            _resolveAntigen('Influenza A', self.EPITOPES)
+
+    def test_antigen_species_keeps_that_organism_and_those_under_it(self):
+        """'Influenza A virus' keeps the species' own epitope and its
+        strain's, through IEDB's source_organism_iri_search."""
+        frame = iedbAirrRows(*[
+            {'cell_id': str(n), 'sequence_id': '%d_1' % n,
+             'reactivity_ref': 'IEDB_EPITOPE:%d' % n} for n in (1, 2, 3, 4)])
+
+        kept, report = self._normalize(frame, antigen_species='Influenza A virus',
+                                       handler=itemRangeHandler([self.EPITOPES]))
+
+        self.assertEqual(kept['sequence_id'].tolist(), ['1_1', '2_1'])
+        self.assertEqual((report['rows_in'], report['rows_out']), (4, 2))
+
+    def test_antigen_species_accepts_any_name(self):
+        """The schema lets any name through; IEDB is asked when fetching."""
+        source = IedbSource(makeClient(lambda *a: FakeResponse(200)))
+        query = source.validateQuery('tcr', {'antigen_species': 'Yellow fever virus'})
+        self.assertEqual(query.filters['antigen_species'], 'Yellow fever virus')
 
     def test_every_species_name_has_codes(self):
         from immvoke.Sources.Specificity.Iedb import (

@@ -46,11 +46,16 @@ class Field:
       wildcard (str): the value meaning "all".
       pseudo_values (bool): True when values are presence flags rather than a
         real vocabulary, in which case offering them as choices would mislead.
+      open_values (bool): True when any value is accepted here and the source
+        checks it itself when fetching, because its vocabulary is too large
+        or changes too often to snapshot (IEDB's antigen organisms). values
+        then holds examples, not the full list.
     """
     name: str
     values: tuple = ()
     wildcard: str = '*'
     pseudo_values: bool = False
+    open_values: bool = False
 
     @property
     def flag(self):
@@ -67,7 +72,7 @@ class Field:
         Returns:
           bool: True if the value may be sent.
         """
-        if value == self.wildcard:
+        if value == self.wildcard or self.open_values:
             return True
 
         # A presence-only field has no vocabulary of its own; what it accepts is
@@ -279,7 +284,8 @@ def fromDict(payload):
             Field(name=x['name'],
                   values=tuple(x.get('values') or ()),
                   wildcard=x.get('wildcard', '*'),
-                  pseudo_values=bool(x.get('pseudo_values', False)))
+                  pseudo_values=bool(x.get('pseudo_values', False)),
+                  open_values=bool(x.get('open_values', False)))
             for x in (body.get('fields') or []))
         collections[name] = Collection(
             name=name, fields=fields,
@@ -314,12 +320,15 @@ def toDict(schema):
     collections = {}
     for name in sorted(schema.collections):
         collection = schema.collections[name]
+        # open_values is written only where set, so snapshots of sources
+        # that never use it stay byte identical.
         collections[name] = {
             'reported_totals': dict(collection.reported_totals),
             'fields': [{'name': x.name,
                         'wildcard': x.wildcard,
                         'pseudo_values': x.pseudo_values,
-                        'values': list(x.values)}
+                        'values': list(x.values),
+                        **({'open_values': True} if x.open_values else {})}
                        for x in collection.fields]}
 
     return {'source': schema.source,

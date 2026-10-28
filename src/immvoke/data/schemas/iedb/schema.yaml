@@ -58,6 +58,15 @@ collections:
       - Sus scrofa
       - Vicugna pacos
       - synthetic construct
+    - name: antigen_species
+      wildcard: '*'
+      pseudo_values: false
+      open_values: true
+      values:
+      - Influenza A virus
+      - SARS-CoV2
+      - Human immunodeficiency virus 1
+      - Homo sapiens
     - name: outcome
       wildcard: '*'
       pseudo_values: false
@@ -113,6 +122,15 @@ collections:
       - Sus scrofa
       - Vicugna pacos
       - synthetic construct
+    - name: antigen_species
+      wildcard: '*'
+      pseudo_values: false
+      open_values: true
+      values:
+      - Influenza A virus
+      - SARS-CoV2
+      - Human immunodeficiency virus 1
+      - Homo sapiens
     - name: outcome
       wildcard: '*'
       pseudo_values: false

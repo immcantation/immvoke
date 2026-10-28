@@ -18,7 +18,14 @@ with its partner, so pairs are never split. A species includes its strains:
 `"Mus musculus BALB/c"` keeps that strain alone. The names are IEDB's;
 `immvoke specificity iedb download bcr --help` lists them all. Likewise
 every assay outcome is kept unless `--outcome` names one (`Positive` or
-`Negative`, matched against `iedb_assay_outcome`). The rest is
+`Negative`, matched against `iedb_assay_outcome`), and every antigen unless
+`--antigen_species` names its organism: any name IEDB uses, ignoring case,
+with or without its bracketed common name (`"Homo sapiens"` for
+`Homo sapiens (human)`). An organism includes those under it, so
+`"Influenza A virus"` keeps every flu strain. The AIRR export does not say
+which organism an epitope comes from, so this asks IEDB's API about the
+table's epitopes at download time (about 15 seconds for bcr); an unknown name fails,
+naming the closest IEDB names. The rest is
 kept as is -- one
 rearrangement record per chain, linked by `cell_id`,
 built from IEDB's calculated (IMGT standardized) gene calls and CDRs, with
@@ -26,7 +33,8 @@ the epitope and assay context (`iedb_epitope_name`, `iedb_assay_ids`, ...)
 alongside -- and writes it with a `bcr.airr_validation.log` report next to it.
 
 ```bash
-immvoke specificity iedb download bcr --air_species "Homo sapiens" --outcome Positive --outdir databases
+immvoke specificity iedb download bcr --air_species "Homo sapiens" \
+    --antigen_species "Influenza A virus" --outcome Positive --outdir databases
 ```
 
 Every download lands in its database's own folder under `--outdir`, so

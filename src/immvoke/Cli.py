@@ -89,6 +89,9 @@ def addFilterArgs(parser, schema, source, collection, cap=VALUE_LIST_CAP):
     for item in schema.getCollection(collection).fields:
         if item.pseudo_values:
             summary = 'filter on whether %s is recorded' % item.name
+        elif item.open_values:
+            summary = ('any name %s uses, checked when fetching, e.g. %s'
+                       % (source, ', '.join(item.values)))
         elif cap is None or len(item.values) <= cap:
             summary = '%d values: %s' % (len(item.values), ', '.join(item.values))
         else:
