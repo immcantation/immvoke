@@ -10,6 +10,7 @@ __author__ = 'Susanna Marquez'
 
 # Imports
 import logging
+import shutil
 import sys
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
@@ -1065,6 +1066,10 @@ def handleSpecificityDownload(args):
     if args.dry_run:
         log.info('dry run: nothing downloaded')
         return 0
+
+    if not source.keep_raw:
+        shutil.rmtree(raw_dir, ignore_errors=True)
+        log.info('removed %s', raw_dir)
 
     # A specificity download represents the database's current state, not one
     # more addition to a growing set the way OAS downloads are, so this always

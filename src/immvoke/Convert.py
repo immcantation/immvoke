@@ -13,6 +13,9 @@ import collections
 import logging
 from pathlib import Path
 
+# Immvoke imports
+from immvoke import Provenance
+
 log = logging.getLogger(__name__)
 
 #: Identifier written when a record has no sequence_id. Only the identifier is
@@ -100,23 +103,51 @@ def newValidation():
             'rows_invalid': 0, 'errors': collections.Counter()}
 
 
-def summarizeValidation(validation):
+def summarizeValidation(validation, name='the file'):
     """
-    Render a validation report as text.
+    Render a validation report as plain sentences.
 
     Arguments:
       validation (dict): a report from newValidation().
+      name (str): the rearrangement file the report describes, as it should
+        be named in the text.
 
     Returns:
-      str: a human readable summary.
+      str: a human readable summary: whether the columns and rows are valid
+      AIRR, each distinct row error with how many rows it hit, and an
+      overall verdict.
     """
-    lines = ['header_valid: %s' % validation['header_valid']]
-    if validation['header_error']:
-        lines.append('header_error: %s' % validation['header_error'])
-    lines.append('rows_checked: %d' % validation['rows_checked'])
-    lines.append('rows_invalid: %d' % validation['rows_invalid'])
-    for message, count in validation['errors'].most_common():
-        lines.append('  %6d  %s' % (count, message))
+    checked, invalid = validation['rows_checked'], validation['rows_invalid']
+    lines = ['AIRR validation of %s' % name,
+             'Checked: %s' % Provenance.timestamp(), '']
+
+    if validation['header_valid'] is None:
+        lines.append('Columns: not checked, the table is empty.')
+    elif validation['header_valid']:
+        lines.append('Columns: OK, every required AIRR field is present.')
+    else:
+        lines.append('Columns: PROBLEM, %s' % validation['header_error'])
+
+    if not checked:
+        lines.append('Rows:    none to check.')
+    elif not invalid:
+        lines.append('Rows:    %s checked, all valid.' % format(checked, ','))
+    else:
+        lines.append('Rows:    %s checked, %s invalid (%.1f%%).'
+                     % (format(checked, ','), format(invalid, ','),
+                        100.0 * invalid / checked))
+        lines += ['', 'Row errors, most common first (rows affected, error):']
+        for message, count in validation['errors'].most_common():
+            lines.append('  %8s  %s' % (format(count, ','), message))
+
+    lines.append('')
+    if validation['header_valid'] is False or invalid:
+        lines.append('Result: FAIL. %s was still written in full; this log only '
+                     'records what did not meet the AIRR schema.' % name)
+    elif checked:
+        lines.append('Result: PASS. %s is a valid AIRR rearrangement file.' % name)
+    else:
+        lines.append('Result: nothing to validate.')
 
     return '\n'.join(lines) + '\n'
 
@@ -194,7 +225,8 @@ def writeAirr(chunks, out, strict=False, validation=None):
 
 def writeValidationReport(validation, out):
     """
-    Write a validation summary next to its rearrangement file.
+    Write a validation summary next to its rearrangement file, as
+    <stem>.airr_validation.log (bcr.tsv -> bcr.airr_validation.log).
 
     Arguments:
       validation (dict): the report.
@@ -203,8 +235,9 @@ def writeValidationReport(validation, out):
     Returns:
       Path: the report file.
     """
-    report = Path(str(out) + '.validation.txt')
-    report.write_text(summarizeValidation(validation))
+    out = Path(out)
+    report = out.with_suffix('.airr_validation.log')
+    report.write_text(summarizeValidation(validation, out.name))
 
     return report
 

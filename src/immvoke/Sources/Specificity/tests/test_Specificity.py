@@ -423,3 +423,30 @@ class TestIedbAirrExport(unittest.TestCase):
 
         self.assertEqual(single['hit_ids'].tolist(), ['1284_1'])
         self.assertEqual(paired['classification'].tolist(), ['both'])
+
+    def test_download_removes_the_raw_mirror(self):
+        """
+        `immvoke specificity iedb download` keeps only the normalized tables:
+        the bulk ZIP and the tables extracted from it are deleted afterwards.
+        """
+        from argparse import Namespace
+        from unittest import mock
+
+        from immvoke import Cli
+
+        zip_bytes = makeZip({
+            'bcr_full_airr.tsv': self._antibody().to_csv(sep='\t', index=False),
+            'tcr_full_airr.tsv': 'sequence_id\tlocus\nt1\tTRB\n',
+        })
+        args = Namespace(db='iedb', table='bcr', limit=None, dry_run=False,
+                         no_resume=False, strict_airr=False)
+
+        with tempfile.TemporaryDirectory() as outdir:
+            args.outdir = Path(outdir)
+            with mock.patch.object(Cli, 'makeClient',
+                                   return_value=makeClient(rangeHandler(zip_bytes))):
+                Cli.handleSpecificityDownload(args)
+
+            self.assertFalse((Path(outdir) / 'iedb' / 'raw').exists())
+            self.assertTrue((Path(outdir) / 'iedb' / 'bcr.tsv').exists())
+            self.assertTrue((Path(outdir) / 'iedb' / 'download_metadata.yml').exists())

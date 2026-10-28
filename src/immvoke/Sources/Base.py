@@ -125,6 +125,11 @@ class SourceBase(ABC):
     #: real, schema-validated rearrangement TSV for a listed collection and a
     #: plain TSV for everything else.
     airr_collections = frozenset()
+    #: Whether `immvoke specificity <db> download` keeps the raw mirror,
+    #: <db>/raw/, once every table has been written. False for a source whose
+    #: raw files are only an intermediate step, such as IEDB's bulk ZIP and
+    #: the tables extracted from it; the normalized TSVs are what remain.
+    keep_raw = True
     #: How to cite this source, one string per paper, oldest first. Shown in
     #: `immvoke sources list` and recorded in download provenance, so that
     #: the record of what was downloaded travels with a reminder of how to

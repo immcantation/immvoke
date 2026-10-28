@@ -16,7 +16,7 @@ partner, so pairs are never split. The rest is kept as is -- one
 rearrangement record per chain, linked by `cell_id`,
 built from IEDB's calculated (IMGT standardized) gene calls and CDRs, with
 the epitope and assay context (`iedb_epitope_name`, `iedb_assay_ids`, ...)
-alongside -- and writes it with a `.validation.txt` report next to it.
+alongside -- and writes it with a `bcr.airr_validation.log` report next to it.
 
 ```bash
 immvoke specificity bcr --outdir databases
@@ -30,7 +30,7 @@ one outdir without mixing their files:
 databases/
 └── iedb/
     ├── bcr.tsv                  # the reference table for annotate
-    ├── bcr.tsv.validation.txt   # AIRR validation report
+    ├── bcr.airr_validation.log  # AIRR validation report
     ├── download_metadata.yml    # source, license, citation, when, command
     └── raw/                     # IEDB's airr_full.zip and the file taken from it
 ```
