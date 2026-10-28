@@ -159,9 +159,9 @@ class TestIedbSource(unittest.TestCase):
         bcr = source.searchUnits(Query(collection='bcr', filters={}))[0]
         self.assertEqual(bcr.url, BULK_URL)
         bcell = source.searchUnits(
-            Query(collection='bcell', filters={'qualitative_measure': 'Positive'}))[0]
+            Query(collection='bcell', filters={'outcome': 'Positive'}))[0]
         self.assertEqual(bcell.url, API_BASE + '/bcell_search')
-        self.assertEqual(bcell.metadata, {'qualitative_measure': 'Positive'})
+        self.assertEqual(bcell.metadata, {'outcome': 'Positive'})
 
     def test_fetch_unit_extracts_the_right_member_from_the_shared_zip(self):
         """bcr and tcr are both members of one AIRR ZIP, extracted by name."""
@@ -218,32 +218,34 @@ class TestIedbSource(unittest.TestCase):
         self.assertEqual(report['rows_in'], 1)
         self.assertEqual(report['rows_out'], 1)
 
-    def test_normalize_chunk_applies_the_qualitative_measure_filter(self):
+    def test_normalize_chunk_applies_the_outcome_filter(self):
         """
-        bcell_search has no server side filter for qualitative_measure, so a
-        non wildcard value is applied client side during normalization.
+        bcell_search has no server side filter for qualitative_measure, so
+        --outcome is applied client side during normalization, matching the
+        grade exactly: Positive does not take in Positive-High.
         """
         source = IedbSource(makeClient(lambda *a: FakeResponse(200)))
         unit = DataUnit(unit_id='bcell_search.json', collection='bcell',
                        url=API_BASE + '/bcell_search',
-                       metadata={'qualitative_measure': 'Positive'})
+                       metadata={'outcome': 'Positive'})
         chunk = pandas.DataFrame([
             {'qualitative_measure': 'Positive'},
             {'qualitative_measure': 'Negative'},
+            {'qualitative_measure': 'Positive-High'},
         ])
         report = {'rows_in': 0, 'rows_out': 0}
 
         frame = source.normalizeChunk({}, chunk, unit, 0, report)
 
         self.assertEqual(frame['qualitative_measure'].tolist(), ['Positive'])
-        self.assertEqual(report['rows_in'], 2)
+        self.assertEqual(report['rows_in'], 3)
         self.assertEqual(report['rows_out'], 1)
 
     def test_normalize_chunk_keeps_everything_for_the_wildcard(self):
         source = IedbSource(makeClient(lambda *a: FakeResponse(200)))
         unit = DataUnit(unit_id='bcell_search.json', collection='bcell',
                        url=API_BASE + '/bcell_search',
-                       metadata={'qualitative_measure': '*'})
+                       metadata={'outcome': '*'})
         chunk = pandas.DataFrame([
             {'qualitative_measure': 'Positive'},
             {'qualitative_measure': 'Negative'},
@@ -307,12 +309,13 @@ class TestIedbAirrExport(unittest.TestCase):
         self.assertEqual(unit.unit_id, 'bcr_full_airr.tsv')
         self.assertTrue(unit.url.endswith('airr_full.zip'))
 
-    def _normalize(self, frame, air_species=None):
+    def _normalize(self, frame, air_species=None, outcome=None):
         """Read and normalize `frame` the way `immvoke specificity iedb
-        download bcr` does, from a downloaded TSV, with --air_species if
-        given."""
+        download bcr` does, from a downloaded TSV, with --air_species and
+        --outcome if given."""
         source = IedbSource(makeClient(lambda *a: FakeResponse(200)))
-        filters = {} if air_species is None else {'air_species': air_species}
+        filters = {k: v for k, v in (('air_species', air_species),
+                                     ('outcome', outcome)) if v is not None}
         unit = DataUnit(unit_id='bcr_full_airr.tsv', collection='bcr', url=BULK_URL,
                         metadata=filters)
         report = {'rows_in': 0, 'rows_out': 0}
@@ -376,12 +379,32 @@ class TestIedbAirrExport(unittest.TestCase):
         kept, _ = self._normalize(self._mixedSpecies(), 'Mus musculus BALB/c')
         self.assertEqual(kept['sequence_id'].tolist(), ['6_1'])
 
+    def test_outcome_keeps_only_that_outcome(self):
+        """IEDB's AIRR export writes the outcome in lower case; --outcome
+        matches it either way, and combines with --air_species."""
+        frame = iedbAirrRows(
+            {'cell_id': 'a', 'sequence_id': '1_1', 'iedb_assay_outcome': 'positive',
+             'locus_species': 'NCBITAXON:9606'},
+            {'cell_id': 'b', 'sequence_id': '2_1', 'iedb_assay_outcome': 'negative',
+             'locus_species': 'NCBITAXON:9606'},
+            {'cell_id': 'c', 'sequence_id': '3_1', 'iedb_assay_outcome': 'positive',
+             'locus_species': 'NCBITAXON:10090'})
+
+        kept, _ = self._normalize(frame, outcome='Negative')
+        self.assertEqual(kept['sequence_id'].tolist(), ['2_1'])
+
+        kept, report = self._normalize(frame, air_species='Homo sapiens',
+                                       outcome='Positive')
+        self.assertEqual(kept['sequence_id'].tolist(), ['1_1'])
+        self.assertEqual((report['rows_in'], report['rows_out']), (3, 1))
+
     def test_air_species_is_a_bcr_and_tcr_filter(self):
         source = IedbSource(makeClient(lambda *a: FakeResponse(200)))
 
         for table in ('bcr', 'tcr'):
             query = source.validateQuery(table, {'air_species': 'Homo sapiens'})
-            self.assertEqual(query.filters, {'air_species': 'Homo sapiens'})
+            self.assertEqual(query.filters, {'air_species': 'Homo sapiens',
+                                             'outcome': '*'})
         with self.assertRaises(Exception):
             source.validateQuery('bcr', {'air_species': 'human'})
 

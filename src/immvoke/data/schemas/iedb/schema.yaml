@@ -58,6 +58,12 @@ collections:
       - Sus scrofa
       - Vicugna pacos
       - synthetic construct
+    - name: outcome
+      wildcard: '*'
+      pseudo_values: false
+      values:
+      - Positive
+      - Negative
   tcr:
     fields:
     - name: air_species
@@ -107,9 +113,15 @@ collections:
       - Sus scrofa
       - Vicugna pacos
       - synthetic construct
+    - name: outcome
+      wildcard: '*'
+      pseudo_values: false
+      values:
+      - Positive
+      - Negative
   bcell:
     fields:
-    - name: qualitative_measure
+    - name: outcome
       wildcard: '*'
       pseudo_values: false
       values:

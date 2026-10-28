@@ -126,11 +126,20 @@ RECEPTOR_SPECIES = {
 #: --air_species's vocabulary: every name in RECEPTOR_SPECIES, sorted.
 _AIR_SPECIES = tuple(sorted(name for name, _ in RECEPTOR_SPECIES.values()))
 
-#: qualitative_measure has no server-side filter on bcell_search, so it is
-#: applied client-side after fetching; this is its known controlled
-#: vocabulary.
+#: --outcome's vocabulary per table, and the IEDB column it filters on. The
+#: AIRR export writes only positive or negative, in lower case; bcell_search's
+#: qualitative_measure has the finer grades. Neither has a server-side
+#: filter, so --outcome is applied client-side, case-insensitively, after
+#: fetching; an exact match, so 'Positive' on bcell does not take in
+#: 'Positive-High' and the rest.
+_RECEPTOR_OUTCOMES = ('Positive', 'Negative')
 _QUALITATIVE_MEASURES = ('Positive', 'Positive-High', 'Positive-Intermediate',
                          'Positive-Low', 'Negative')
+_OUTCOME_COLUMN = {
+    'bcr': 'iedb_assay_outcome',
+    'tcr': 'iedb_assay_outcome',
+    'bcell': 'qualitative_measure',
+}
 
 def _speciesCodes(name):
     """
@@ -269,12 +278,12 @@ class IedbSource(SourceBase):
         from immvoke.Version import __version__
 
         air_species = Field(name='air_species', values=_AIR_SPECIES)
+        outcome = Field(name='outcome', values=_RECEPTOR_OUTCOMES)
         collections = {
-            'bcr': Collection(name='bcr', fields=(air_species,)),
-            'tcr': Collection(name='tcr', fields=(air_species,)),
+            'bcr': Collection(name='bcr', fields=(air_species, outcome)),
+            'tcr': Collection(name='tcr', fields=(air_species, outcome)),
             'bcell': Collection(name='bcell', fields=(
-                Field(name='qualitative_measure',
-                      values=_QUALITATIVE_MEASURES),
+                Field(name='outcome', values=_QUALITATIVE_MEASURES),
             )),
             'bcr_to_bcell': Collection(name='bcr_to_bcell'),
         }
@@ -432,6 +441,7 @@ class IedbSource(SourceBase):
             report['rows_in'] += len(chunk)
             kept = metadata['kept_cells']
             frame = chunk if kept is None else chunk[chunk['cell_id'].isin(kept)]
+            frame = self._applyClientFilter(frame, unit)
             report['rows_out'] += len(frame)
             frame = coerceAirrTypes(frame.copy())
         else:
@@ -475,7 +485,8 @@ class IedbSource(SourceBase):
 
     def _applyClientFilter(self, frame, unit):
         """
-        Apply qualitative_measure filtering that bcell_search cannot do itself.
+        Apply --outcome, which neither the AIRR export nor bcell_search can
+        filter on itself (see _OUTCOME_COLUMN).
 
         Arguments:
           frame (pandas.DataFrame): raw records for one chunk.
@@ -485,8 +496,9 @@ class IedbSource(SourceBase):
           pandas.DataFrame: the filtered chunk, or the chunk unchanged for
           tables and filters this does not apply to.
         """
-        wanted = (unit.metadata or {}).get('qualitative_measure')
-        if not wanted or wanted == '*' or 'qualitative_measure' not in frame.columns:
+        wanted = (unit.metadata or {}).get('outcome')
+        column = _OUTCOME_COLUMN.get(unit.collection)
+        if not wanted or wanted == '*' or column not in frame.columns:
             return frame
 
-        return frame[frame['qualitative_measure'] == wanted]
+        return frame[frame[column].str.lower() == wanted.lower()]

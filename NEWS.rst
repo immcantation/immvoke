@@ -12,9 +12,12 @@ Specificity:
   per chain, linked by ``cell_id``, taking IEDB's calculated (IMGT
   standardized) V/D/J-gene calls over the curated ones, every receptor
   species kept unless ``--air_species`` names one (e.g. ``--air_species
-  "Homo sapiens"``; a species includes its strains).
+  "Homo sapiens"``; a species includes its strains), and every assay
+  outcome unless ``--outcome`` names one (``Positive`` or ``Negative``).
+  ``--outcome`` also replaces ``--qualitative_measure`` on IEDB's ``bcell``
+  table, keeping its finer grades (``Positive-High``, ...).
 + Filter flags generated from a source's schema are spelled with
-  underscores, as the field is (``--qualitative_measure``, ``--air_species``).
+  underscores, as the field is (``--air_species``).
 + Each specificity download lands in its database's own folder,
   ``<outdir>/<db>/``: the normalized ``<table>.tsv``, ``raw/`` and its own
   ``download_metadata.yml``.
