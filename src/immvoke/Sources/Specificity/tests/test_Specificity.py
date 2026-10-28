@@ -223,7 +223,8 @@ class TestIedbSource(unittest.TestCase):
             metadata, chunks = source.readUnit(path, unit)
             frame = pandas.concat(list(chunks), ignore_index=True)
 
-        self.assertEqual(metadata, {'kept_cells': None, 'kept_epitopes': None})
+        self.assertEqual(metadata, {'kept_cells': None, 'kept_epitopes': None,
+                                    'antigens': {}})
         self.assertEqual(list(frame.columns), list(IEDB_AIRR_COLUMNS))
         self.assertEqual(frame['cdr3_aa'].tolist(), ['ARDYW'])
         self.assertEqual(frame['iedb_assay_ids'].tolist(), ['32'])
@@ -411,6 +412,32 @@ class TestIedbAirrExport(unittest.TestCase):
         self.assertEqual(kept['sequence_id'].tolist(), ['1_1', '2_1'])
         self.assertEqual((report['rows_in'], report['rows_out']), (4, 2))
 
+    def test_each_record_gets_its_epitopes_antigen_and_source_species(self):
+        """From IEDB's curated_source_antigens, several ' | ' joined; an
+        epitope IEDB names no antigen for, or a blank one, is left blank.
+        The row hash covers IEDB's export only, so it does not change."""
+        epitopes = [
+            {'structure_id': 7, 'curated_source_antigens': [
+                {'name': 'hemagglutinin',
+                 'source_organism_name': 'Influenza A virus (A/Korea/01/2009(H1N1))'}]},
+            {'structure_id': 8, 'curated_source_antigens': [
+                {'name': 'Spike glycoprotein', 'source_organism_name': 'SARS-CoV2'},
+                {'name': 'Spike protein S2', 'source_organism_name': 'SARS-CoV2'}]},
+            {'structure_id': 9, 'curated_source_antigens': None}]
+        frame = iedbAirrRows(*[
+            {'cell_id': str(n), 'sequence_id': '%d_1' % n,
+             'reactivity_ref': 'IEDB_EPITOPE:%d' % n if n else ''} for n in (7, 8, 9, 0)])
+
+        kept, _ = self._normalize(frame, handler=itemRangeHandler([epitopes]))
+        plain, _ = self._normalize(frame.assign(reactivity_ref=''))
+
+        self.assertEqual(kept['iedb_antigen'].tolist(),
+                         ['hemagglutinin', 'Spike glycoprotein | Spike protein S2', '', ''])
+        self.assertEqual(kept['iedb_antigen_source_species'].tolist(),
+                         ['Influenza A virus (A/Korea/01/2009(H1N1))', 'SARS-CoV2', '', ''])
+        self.assertNotEqual(kept['immvoke_row_hash'].tolist(),
+                            plain['immvoke_row_hash'].tolist())
+
     def test_antigen_species_accepts_any_name(self):
         """The schema lets any name through; IEDB is asked when fetching."""
         source = IedbSource(makeClient(lambda *a: FakeResponse(200)))
@@ -430,11 +457,13 @@ class TestIedbAirrExport(unittest.TestCase):
     def test_records_pass_through_with_provenance(self):
         frame, report = self._normalize(self._antibody())
 
+        at = IEDB_AIRR_COLUMNS.index('iedb_epitope_name') + 1
         self.assertEqual(list(frame.columns),
-                         list(IEDB_AIRR_COLUMNS) + ['immvoke_source',
-                                                    'immvoke_collection',
-                                                    'immvoke_unit_id',
-                                                    'immvoke_row_hash'])
+                         list(IEDB_AIRR_COLUMNS[:at])
+                         + ['iedb_antigen', 'iedb_antigen_source_species']
+                         + list(IEDB_AIRR_COLUMNS[at:])
+                         + ['immvoke_source', 'immvoke_collection',
+                            'immvoke_unit_id', 'immvoke_row_hash'])
         self.assertEqual(frame['sequence_id'].tolist(), ['1284_1', '1284_2'])
         self.assertEqual(frame['cell_id'].tolist(), ['1284_2134780p'] * 2)
         self.assertEqual(frame['v_call'].tolist(),

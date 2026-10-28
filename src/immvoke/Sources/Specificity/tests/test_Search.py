@@ -6,6 +6,7 @@ Unit tests for `immvoke specificity <db> search` and the filter flags' help
 __author__ = 'Pramod Shinde'
 
 # Imports
+import json
 import os
 import tempfile
 import time
@@ -32,7 +33,7 @@ from immvoke.Sources.Specificity.tests.test_Specificity import (
     makeClient,
     makeZip,
 )
-from tests.FakeHttp import rangeHandler
+from tests.FakeHttp import FakeResponse, rangeHandler
 
 
 def iedbZip():
@@ -50,6 +51,29 @@ def iedbZip():
 
     return makeZip({'bcr_full_airr.tsv': bcr.to_csv(sep='\t', index=False),
                     'tcr_full_airr.tsv': 'cell_id\n'})
+
+
+#: epitope_search's answer for iedbZip's two epitopes.
+EPITOPES = [
+    {'structure_id': 7, 'source_organism_iri_search': ['NCBITaxon:11320'],
+     'curated_source_antigens': [{'name': 'hemagglutinin',
+                                  'source_organism_name': 'Influenza A virus'}]},
+    {'structure_id': 8, 'source_organism_iri_search': ['NCBITaxon:9606'],
+     'curated_source_antigens': [{'name': 'Angiogenin',
+                                  'source_organism_name': 'Homo sapiens (human)'}]},
+]
+
+
+def iedbHandler(zip_bytes):
+    """Serve the bulk ZIP, and EPITOPES to any epitope_search request."""
+    serve_zip = rangeHandler(zip_bytes)
+
+    def handler(method, url, headers, index):
+        if 'epitope_search' in url:
+            return FakeResponse(200, json.dumps(EPITOPES).encode('utf-8'))
+        return serve_zip(method, url, headers, index)
+
+    return handler
 
 
 class CountingHandler:
@@ -125,7 +149,7 @@ class TestSearch(unittest.TestCase):
 
     def setUp(self):
         isolateCache(self)
-        self.source = IedbSource(makeClient(rangeHandler(iedbZip())))
+        self.source = IedbSource(makeClient(iedbHandler(iedbZip())))
 
     def test_counts_rows_distinct_values_and_top_values(self):
         with tempfile.TemporaryDirectory() as workdir:
@@ -137,6 +161,8 @@ class TestSearch(unittest.TestCase):
         # taxon codes are named, strains by their own name
         self.assertEqual(dict(summary['top']['receptor species']),
                          {'Homo sapiens': 2, 'Mus musculus BALB/c': 1})
+        self.assertEqual(dict(summary['top']['antigen species']),
+                         {'Influenza A virus': 2, 'Homo sapiens (human)': 1})
 
     def test_filters_narrow_the_counts(self):
         with tempfile.TemporaryDirectory() as workdir:

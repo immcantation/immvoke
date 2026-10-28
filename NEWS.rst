@@ -28,6 +28,9 @@ Specificity:
   download's filters are grouped in ``--help``, each saying what it filters
   on, and ``--limit`` is left only on ``download all``, the one place it
   had an effect.
++ IEDB's bcr and tcr tables gain ``iedb_antigen`` and
+  ``iedb_antigen_source_species``, each record's epitope's antigen and its
+  source species, looked up on IEDB's API at download time.
 + IEDB's bulk ZIP is cached in ``~/.cache/immvoke/iedb/`` for a day, shared
   by search and download, so ``bcr`` then ``tcr`` fetch it once.
 + Filter flags generated from a source's schema are spelled with

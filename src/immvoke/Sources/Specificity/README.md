@@ -77,6 +77,12 @@ databases/
     └── download_metadata.yml         # source, license, citation, when, command
 ```
 
+Each record also gets its epitope's antigen and that antigen's source
+species, `iedb_antigen` and `iedb_antigen_source_species` (after
+`iedb_epitope_name`), which IEDB's AIRR export lacks: the download looks the
+table's epitopes up on IEDB's API (`curated_source_antigens`, several
+` | ` joined), adding about 15 seconds.
+
 The written `databases/iedb/iedb_bcr.tsv` keeps every column IEDB provides and
 always carries every field the AIRR schema requires; one IEDB lacks is
 written blank.
