@@ -7,9 +7,9 @@ table it agrees with -- one annotation per query row (its `sequence_id`,
 (query, reference) pair: the hits of an exact match, or every pair through
 the gates below an exact match. This is the last pipeline stage: download a
 specificity database's table, which lands as an AIRR rearrangement TSV in
-the database's own folder (`immvoke specificity bcr`), then annotate a
-user's own AIRR table against it as the reference, into an output folder of
-its own.
+the database's own folder (`immvoke specificity iedb download bcr`), then
+annotate a user's own AIRR table against it as the reference, into an output
+folder of its own.
 
 annotateSpecificity() is the entry point `immvoke annotate` wraps: it picks
 the comparison from a few knobs (sequence_region, partition_by,

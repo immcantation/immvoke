@@ -11,10 +11,10 @@ handleAnnotate only forwards them.
 
 Reads two AIRR rearrangement TSVs already on disk -- typically a user's own
 receptor table as `--query` and a specificity database's downloaded table
-(e.g. `immvoke specificity bcr`'s output) as `--reference` -- and writes
-the annotation, its scored (query, reference) pairs and a record of the run
-into `--outdir`. It does not itself download or convert anything; that is
-handled by `immvoke specificity bcr`.
+(e.g. `immvoke specificity iedb download bcr`'s output) as `--reference` --
+and writes the annotation, its scored (query, reference) pairs and a record
+of the run into `--outdir`. It does not itself download or convert anything; that is
+handled by `immvoke specificity iedb download bcr`.
 """
 
 # Info
@@ -47,7 +47,7 @@ def addAnnotateParser(commands):
         description='Annotate each row of a query AIRR rearrangement table '
                     'with antigen specificity information from a fixed '
                     'reference AIRR rearrangement table, e.g. `immvoke '
-                    'specificity bcr`\'s output.',
+                    'specificity iedb download bcr`\'s output.',
         formatter_class=CommonHelpFormatter)
 
     parser.add_argument('--query', type=Path, required=True,

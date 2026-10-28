@@ -8,7 +8,7 @@ it. How the matching works, step by step, is in [idea.md](idea.md).
 
 [IEDB](https://www.iedb.org/) (`Iedb.py`) publishes its BCR (antibody)
 receptors in AIRR format, as `bcr_full_airr.tsv` inside its bulk
-`airr_full.zip` export, refreshed weekly. `immvoke specificity bcr` downloads
+`airr_full.zip` export, refreshed weekly. `immvoke specificity iedb download bcr` downloads
 that table, keeping **human receptors only**: a receptor is kept when it has
 a human chain (`locus_species` `NCBITAXON:9606`) and no chain of another
 species -- a chain with no species recorded rides along with its human
@@ -19,12 +19,11 @@ the epitope and assay context (`iedb_epitope_name`, `iedb_assay_ids`, ...)
 alongside -- and writes it with a `bcr.airr_validation.log` report next to it.
 
 ```bash
-immvoke specificity bcr --outdir databases
+immvoke specificity iedb download bcr --outdir databases
 ```
 
-Every download lands in its database's own folder under `--outdir`
-(`databases` by default for `specificity bcr`), so more databases can share
-one outdir without mixing their files:
+Every download lands in its database's own folder under `--outdir`, so
+more databases can share one outdir without mixing their files:
 
 ```
 databases/
@@ -164,5 +163,5 @@ gets its own `cell_id`, but the chains keep the receptor's `sequence_id`, so
 one id in `hit_ids` can stand for several reference rows. Join `hit_ids`
 back to the reference on `sequence_id` to see every epitope behind a hit.
 
-Reference command: `immvoke specificity bcr --help`,
+Reference command: `immvoke specificity iedb download bcr --help`,
 `immvoke annotate --help`.

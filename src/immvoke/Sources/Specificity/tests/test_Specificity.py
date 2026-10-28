@@ -308,8 +308,8 @@ class TestIedbAirrExport(unittest.TestCase):
         self.assertTrue(unit.url.endswith('airr_full.zip'))
 
     def _normalize(self, frame):
-        """Read and normalize `frame` the way `immvoke specificity bcr` does,
-        from a downloaded TSV."""
+        """Read and normalize `frame` the way `immvoke specificity iedb
+        download bcr` does, from a downloaded TSV."""
         source = IedbSource(makeClient(lambda *a: FakeResponse(200)))
         unit = DataUnit(unit_id='bcr_full_airr.tsv', collection='bcr', url=BULK_URL)
         report = {'rows_in': 0, 'rows_out': 0}
@@ -371,7 +371,7 @@ class TestIedbAirrExport(unittest.TestCase):
         self.assertEqual((report['rows_in'], report['rows_out']), (2, 2))
 
     def test_writes_as_a_header_and_row_valid_rearrangement(self):
-        """What `immvoke specificity bcr` writes is valid AIRR, as is."""
+        """What `immvoke specificity iedb download bcr` writes is valid AIRR, as is."""
         from immvoke import Convert
 
         frame, _ = self._normalize(self._antibody())
@@ -384,9 +384,10 @@ class TestIedbAirrExport(unittest.TestCase):
 
     def test_written_file_keeps_iedb_columns_and_every_required_field(self):
         """
-        The way `immvoke specificity bcr` writes it (strict_airr off): IEDB's
-        own columns survive, and a required field the export lacks is still
-        written, blank -- so the file is always a full AIRR table.
+        The way `immvoke specificity iedb download bcr` writes it (strict_airr
+        off): IEDB's own columns survive, and a required field the export
+        lacks is still written, blank -- so the file is always a full AIRR
+        table.
         """
         from airr.schema import RearrangementSchema
 
