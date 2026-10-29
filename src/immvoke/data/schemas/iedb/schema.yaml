@@ -67,6 +67,14 @@ collections:
       - SARS-CoV2
       - Human immunodeficiency virus 1
       - Homo sapiens
+    - name: antigen_structure_type
+      wildcard: '*'
+      pseudo_values: false
+      values:
+      - Linear peptide
+      - Discontinuous peptide
+      - Discontinuous peptide on multi chain
+      - Non-peptidic
     - name: outcome
       wildcard: '*'
       pseudo_values: false
@@ -131,6 +139,14 @@ collections:
       - SARS-CoV2
       - Human immunodeficiency virus 1
       - Homo sapiens
+    - name: antigen_structure_type
+      wildcard: '*'
+      pseudo_values: false
+      values:
+      - Linear peptide
+      - Discontinuous peptide
+      - Discontinuous peptide on multi chain
+      - Non-peptidic
     - name: outcome
       wildcard: '*'
       pseudo_values: false

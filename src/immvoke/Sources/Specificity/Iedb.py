@@ -16,8 +16,10 @@ linked by cell_id, built from IEDB's calculated (IMGT standardized) fields
 and carrying the epitope and assay context alongside. They are already AIRR,
 so normalizeChunk passes them through, adding only provenance columns. Every
 receptor species is kept unless --air_species names one (see
-RECEPTOR_SPECIES and _speciesCells), and every antigen unless
---antigen_species names its organism (see _antigenEpitopes). Each record
+RECEPTOR_SPECIES and _speciesCells), every antigen unless
+--antigen_species names its organism (see _antigenEpitopes), and every
+epitope structure unless --antigen_structure_type names one (see
+_structureEpitopes). Each record
 already carries its epitope, assay ids and outcome, so IEDB's separate
 B-cell assay tables (bcell_search, bcr_to_bcell) are not offered.
 """
@@ -137,15 +139,23 @@ _RECEPTOR_OUTCOMES = ('Positive', 'Negative')
 _ANTIGEN_SPECIES_EXAMPLES = ('Influenza A virus', 'SARS-CoV2',
                              'Human immunodeficiency virus 1', 'Homo sapiens')
 
+#: --antigen_structure_type's vocabulary: IEDB's epitope structure_type, the
+#: same choice as its home page search's Epitope Structure. 'Discontinuous
+#: peptide' also keeps 'Discontinuous peptide on multi chain', the way a
+#: species keeps its strains.
+_ANTIGEN_STRUCTURE_TYPES = ('Linear peptide', 'Discontinuous peptide',
+                            'Discontinuous peptide on multi chain', 'Non-peptidic')
+
 #: Epitope ids asked for per epitope_search request (see _epitopeRecords);
 #: keeps each request URL a few kilobytes long.
 EPITOPE_BATCH = 300
 
 #: The columns added to bcr and tcr from each record's epitope: its
-#: antigen, and the organism that antigen comes from (see _epitopeAntigens),
-#: placed after iedb_epitope_name.
+#: antigen, the organism that antigen comes from, and the epitope's
+#: structure type (see _epitopeAntigens), placed after iedb_epitope_name.
 ANTIGEN_COL = 'iedb_antigen'
 ANTIGEN_SPECIES_COL = 'iedb_antigen_source_species'
+ANTIGEN_STRUCTURE_COL = 'iedb_antigen_structure_type'
 #: Joins an epitope's antigens when IEDB curates several.
 ANTIGEN_SEP = ' | '
 
@@ -208,8 +218,9 @@ def _epitopeRecords(client, path, chunksize):
     Look up the epitopes of a receptor AIRR table on IEDB's epitope_search.
 
     The AIRR export records each record's epitope (reactivity_ref) but not
-    the epitope's antigen or that antigen's organism, so this asks the API
-    about the table's own epitopes, in batches of EPITOPE_BATCH.
+    the epitope's antigen, that antigen's organism or the epitope's
+    structure type, so this asks the API about the table's own epitopes, in
+    batches of EPITOPE_BATCH.
 
     Arguments:
       client (HttpClient): the shared HTTP client.
@@ -219,7 +230,7 @@ def _epitopeRecords(client, path, chunksize):
     Returns:
       list: epitope_search records: structure_id, the source organism names,
       ids and ids with every organism above them (source_organism_iri_search),
-      and curated_source_antigens.
+      curated_source_antigens and structure_type.
     """
     ids = set()
     for chunk in pandas.read_csv(path, sep='\t', dtype=str, na_filter=False,
@@ -231,7 +242,7 @@ def _epitopeRecords(client, path, chunksize):
     for start in range(0, len(numbers), EPITOPE_BATCH):
         params = {'select': 'structure_id,source_organism_names,'
                             'source_organism_iris,source_organism_iri_search,'
-                            'curated_source_antigens',
+                            'curated_source_antigens,structure_type',
                   'structure_id': 'in.(%s)'
                                   % ','.join(numbers[start:start + EPITOPE_BATCH])}
         for batch in pageByRange(client, API_BASE + '/epitope_search',
@@ -267,19 +278,44 @@ def _antigenEpitopes(records, name):
     return kept
 
 
+def _structureEpitopes(records, name):
+    """
+    The epitopes (reactivity_ref) of the structure type `name`, or of one
+    under it ('Discontinuous peptide' takes in 'Discontinuous peptide on
+    multi chain'). The schema has already checked the name against
+    _ANTIGEN_STRUCTURE_TYPES; IEDB's own value is compared ignoring case, in
+    case its capitalization drifts.
+
+    Arguments:
+      records (list): epitope_search records, from _epitopeRecords.
+      name (str): the --antigen_structure_type value.
+
+    Returns:
+      frozenset: the reactivity_ref values to keep.
+    """
+    wanted = name.strip().lower()
+    kept = frozenset(
+        'IEDB_EPITOPE:%s' % record['structure_id'] for record in records
+        if (record.get('structure_type') or '').lower() in (wanted, wanted + ' on multi chain'))
+    log.info("antigen structure type '%s': %d of %d epitopes kept", name, len(kept),
+             len(records))
+
+    return kept
+
+
 def _epitopeAntigens(records):
     """
     Each epitope's antigen and that antigen's source species, from IEDB's
-    curated_source_antigens, for the iedb_antigen and
-    iedb_antigen_source_species columns.
+    curated_source_antigens, and its structure_type, for the iedb_antigen,
+    iedb_antigen_source_species and iedb_antigen_structure_type columns.
 
     Arguments:
       records (list): epitope_search records, from _epitopeRecords.
 
     Returns:
-      dict: reactivity_ref -> (antigen names, their source species), each
-      ' | ' joined in IEDB's order when an epitope has several antigens,
-      blank when IEDB names none.
+      dict: reactivity_ref -> (antigen names, their source species,
+      structure type), the first two ' | ' joined in IEDB's order when an
+      epitope has several antigens, each blank when IEDB names none.
     """
     antigens = {}
     for record in records:
@@ -289,7 +325,8 @@ def _epitopeAntigens(records):
                                      for x in curated))
         antigens['IEDB_EPITOPE:%s' % record['structure_id']] = (
             ANTIGEN_SEP.join(x for x in names if x),
-            ANTIGEN_SEP.join(x for x in species if x))
+            ANTIGEN_SEP.join(x for x in species if x),
+            record.get('structure_type') or '')
 
     return antigens
 
@@ -403,6 +440,10 @@ class IedbSource(SourceBase):
         'antigen_species': ('ORGANISM', 'the organism its epitope comes from: '
                                         'any name IEDB uses, ignoring case; an '
                                         'organism includes those under it'),
+        'antigen_structure_type': ('TYPE', "its epitope's structure, IEDB's "
+                                           'structure_type; Discontinuous '
+                                           'peptide includes its multi chain '
+                                           'kind'),
         'outcome': ('OUTCOME', 'the assay outcome, iedb_assay_outcome'),
     }
     search_columns = dict.fromkeys(collections, (
@@ -411,6 +452,7 @@ class IedbSource(SourceBase):
         ('locus', 'locus', 'top'),
         ('locus_species', 'receptor species', 'top'),
         (ANTIGEN_SPECIES_COL, 'antigen species', 'top'),
+        (ANTIGEN_STRUCTURE_COL, 'antigen structure type', 'top'),
         ('iedb_assay_outcome', 'outcome', 'top'),
     ))
 
@@ -446,7 +488,9 @@ class IedbSource(SourceBase):
         outcome = Field(name='outcome', values=_RECEPTOR_OUTCOMES)
         antigen_species = Field(name='antigen_species',
                                 values=_ANTIGEN_SPECIES_EXAMPLES, open_values=True)
-        receptor_fields = (air_species, antigen_species, outcome)
+        antigen_structure_type = Field(name='antigen_structure_type',
+                                       values=_ANTIGEN_STRUCTURE_TYPES)
+        receptor_fields = (air_species, antigen_species, antigen_structure_type, outcome)
         collections = {
             'bcr': Collection(name='bcr', fields=receptor_fields),
             'tcr': Collection(name='tcr', fields=receptor_fields),
@@ -543,21 +587,30 @@ class IedbSource(SourceBase):
           tuple: (metadata, iterator of raw record chunks). metadata holds
           `kept_cells`, the receptors normalizeChunk keeps (see
           _speciesCells), and `kept_epitopes`, the epitopes it keeps (see
-          _antigenEpitopes), each None to keep everything when its filter
-          (--air_species, --antigen_species) was not given; and `antigens`,
-          each epitope's antigen and source species (see _epitopeAntigens).
-          The table is read as text, blank cells as '' rather than NaN.
+          _antigenEpitopes and _structureEpitopes, both applying when both
+          are given), each None to keep everything when its filter
+          (--air_species; --antigen_species, --antigen_structure_type) was
+          not given; and `antigens`, each epitope's antigen, source species
+          and structure type (see _epitopeAntigens). The table is read as
+          text, blank cells as '' rather than NaN.
         """
         filters = unit.metadata or {}
         species = filters.get('air_species')
         antigen = filters.get('antigen_species')
+        structure = filters.get('antigen_structure_type')
         records = _epitopeRecords(self.client, path, chunksize)
+        kept_epitopes = None
+        if antigen and antigen != '*':
+            kept_epitopes = _antigenEpitopes(records, antigen)
+        if structure and structure != '*':
+            by_structure = _structureEpitopes(records, structure)
+            kept_epitopes = (by_structure if kept_epitopes is None
+                             else kept_epitopes & by_structure)
         metadata = {
             'kept_cells': (None if not species or species == '*'
                            else _speciesCells(path, chunksize,
                                               _speciesCodes(species))),
-            'kept_epitopes': (None if not antigen or antigen == '*'
-                              else _antigenEpitopes(records, antigen)),
+            'kept_epitopes': kept_epitopes,
             'antigens': _epitopeAntigens(records),
         }
 
@@ -570,7 +623,8 @@ class IedbSource(SourceBase):
 
         bcr and tcr are already AIRR rearrangement records, one per chain,
         and pass through unchanged, less the rows the filters drop, plus
-        ANTIGEN_COL and ANTIGEN_SPECIES_COL after iedb_epitope_name. Those
+        ANTIGEN_COL, ANTIGEN_SPECIES_COL and ANTIGEN_STRUCTURE_COL after
+        iedb_epitope_name. Those
         come from IEDB's API rather than its export, so the row hash leaves
         them out.
 
@@ -607,6 +661,8 @@ class IedbSource(SourceBase):
                                        for x in found])
         frame.insert(at + 1, ANTIGEN_SPECIES_COL, [x[1] if isinstance(x, tuple) else ''
                                                    for x in found])
+        frame.insert(at + 2, ANTIGEN_STRUCTURE_COL, [x[2] if isinstance(x, tuple) else ''
+                                                     for x in found])
         frame['immvoke_source'] = self.name
         frame['immvoke_collection'] = unit.collection
         frame['immvoke_unit_id'] = unit.unit_id

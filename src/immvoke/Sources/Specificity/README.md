@@ -25,7 +25,12 @@ with or without its bracketed common name (`"Homo sapiens"` for
 `"Influenza A virus"` keeps every flu strain. The AIRR export does not say
 which organism an epitope comes from, so this asks IEDB's API about the
 table's epitopes at download time (about 15 seconds for bcr); an unknown name fails,
-naming the closest IEDB names. The rest is
+naming the closest IEDB names. Every epitope structure is kept unless
+`--antigen_structure_type` names one: `Linear peptide`, `Discontinuous
+peptide` (which includes `Discontinuous peptide on multi chain`) or
+`Non-peptidic` (haptens, glycans, lipids...) -- IEDB's `structure_type`,
+the same choice as its own search's Epitope Structure, looked up in the
+same API call. The rest is
 kept as is -- one
 rearrangement record per chain, linked by `cell_id`,
 built from IEDB's calculated (IMGT standardized) gene calls and CDRs, with
@@ -34,13 +39,15 @@ alongside -- and writes it as `iedb_bcr.tsv` with an `iedb_bcr.airr_validation.l
 
 ```bash
 immvoke specificity iedb download bcr --air_species "Homo sapiens" \
-    --antigen_species "Influenza A virus" --outcome Positive --outdir databases
+    --antigen_species "Influenza A virus" --antigen_structure_type "Discontinuous peptide" \
+    --outcome Positive --outdir databases
 ```
 
 `search` takes the same filters and counts what a download would give,
 writing nothing (unless `--out` asks for the counts as a TSV): rows,
-receptor groups, epitopes, and the most common loci, receptor species and
-outcomes (`--top` of each, 10 by default).
+receptor groups, epitopes, and the most common loci, receptor species,
+antigen species, antigen structure types and outcomes (`--top` of each, 10
+by default).
 
 ```bash
 immvoke specificity iedb search bcr --air_species "Homo sapiens"
@@ -77,11 +84,12 @@ databases/
     └── download_metadata.yml         # source, license, citation, when, command
 ```
 
-Each record also gets its epitope's antigen and that antigen's source
-species, `iedb_antigen` and `iedb_antigen_source_species` (after
+Each record also gets its epitope's antigen, that antigen's source
+species and the epitope's structure type, `iedb_antigen`,
+`iedb_antigen_source_species` and `iedb_antigen_structure_type` (after
 `iedb_epitope_name`), which IEDB's AIRR export lacks: the download looks the
 table's epitopes up on IEDB's API (`curated_source_antigens`, several
-` | ` joined), adding about 15 seconds.
+` | ` joined, and `structure_type`), adding about 15 seconds.
 
 The written `databases/iedb/iedb_bcr.tsv` keeps every column IEDB provides and
 always carries every field the AIRR schema requires; one IEDB lacks is

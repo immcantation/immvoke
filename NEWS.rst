@@ -23,14 +23,20 @@ Specificity:
   the organisms of the table's epitopes when the table is downloaded.
 + ``immvoke specificity <db> search <table>`` counts what the table holds
   once its filters are applied (rows, receptor groups, epitopes and the most
-  common loci, receptor species and outcomes, ``--top`` of each), instead of
+  common loci, receptor, antigen species and structure types and outcomes,
+  ``--top`` of each), instead of
   printing the download URL; ``--out`` writes every count as a TSV. Its and
   download's filters are grouped in ``--help``, each saying what it filters
   on, and ``--limit`` is left only on ``download all``, the one place it
   had an effect.
-+ IEDB's bcr and tcr tables gain ``iedb_antigen`` and
-  ``iedb_antigen_source_species``, each record's epitope's antigen and its
-  source species, looked up on IEDB's API at download time.
++ IEDB's bcr and tcr tables gain ``iedb_antigen``,
+  ``iedb_antigen_source_species`` and ``iedb_antigen_structure_type``, each
+  record's epitope's antigen, its source species and the epitope's
+  structure type, looked up on IEDB's API at download time.
++ ``--antigen_structure_type`` keeps receptors whose epitope has that IEDB
+  structure type: ``Linear peptide``, ``Discontinuous peptide`` (which
+  includes ``Discontinuous peptide on multi chain``) or ``Non-peptidic``
+  (haptens, glycans, lipids...), IEDB's own Epitope Structure choice.
 + IEDB's bulk ZIP is cached in ``~/.cache/immvoke/iedb/`` for a day, shared
   by search and download, so ``bcr`` then ``tcr`` fetch it once.
 + Filter flags generated from a source's schema are spelled with

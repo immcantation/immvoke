@@ -56,9 +56,11 @@ def iedbZip():
 #: epitope_search's answer for iedbZip's two epitopes.
 EPITOPES = [
     {'structure_id': 7, 'source_organism_iri_search': ['NCBITaxon:11320'],
+     'structure_type': 'Linear peptide',
      'curated_source_antigens': [{'name': 'hemagglutinin',
                                   'source_organism_name': 'Influenza A virus'}]},
     {'structure_id': 8, 'source_organism_iri_search': ['NCBITaxon:9606'],
+     'structure_type': 'Non-peptidic',
      'curated_source_antigens': [{'name': 'Angiogenin',
                                   'source_organism_name': 'Homo sapiens (human)'}]},
 ]
@@ -135,6 +137,7 @@ class TestFilterHelp(unittest.TestCase):
         self.assertIn('filters:', text)
         self.assertIn('--air_species SPECIES', text)
         self.assertIn('--antigen_species ORGANISM', text)
+        self.assertIn('--antigen_structure_type TYPE', text)
         self.assertIn('one of: Positive, Negative', text)
         self.assertIn('Mus musculus BALB/c', text)
         self.assertNotIn('default: None', text)
@@ -163,6 +166,8 @@ class TestSearch(unittest.TestCase):
                          {'Homo sapiens': 2, 'Mus musculus BALB/c': 1})
         self.assertEqual(dict(summary['top']['antigen species']),
                          {'Influenza A virus': 2, 'Homo sapiens (human)': 1})
+        self.assertEqual(dict(summary['top']['antigen structure type']),
+                         {'Linear peptide': 2, 'Non-peptidic': 1})
 
     def test_filters_narrow_the_counts(self):
         with tempfile.TemporaryDirectory() as workdir:
