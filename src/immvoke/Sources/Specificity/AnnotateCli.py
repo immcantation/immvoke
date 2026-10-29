@@ -12,9 +12,10 @@ handleAnnotate only forwards them.
 Reads two AIRR rearrangement TSVs already on disk -- typically a user's own
 receptor table as `--query` and a specificity database's downloaded table
 (e.g. `immvoke specificity iedb download bcr`'s output) as `--reference` --
-and writes the annotation, its scored (query, reference) pairs and a record
-of the run into `--outdir`. It does not itself download or convert anything; that is
-handled by `immvoke specificity iedb download bcr`.
+and writes the annotation (each query row's best hits) and a record of the
+run into `--outdir`, plus every hit within the threshold with
+`--full-dist-matrix`. It does not itself download or convert anything; that
+is handled by `immvoke specificity iedb download bcr`.
 """
 
 # Info
@@ -29,7 +30,7 @@ from immvoke.Sources.Specificity.Annotate import (
     ANNOTATION_FILE,
     ANNOTATION_METADATA,
     DEFAULT_COUNT_FIELD,
-    PAIRS_FILE,
+    FULL_MATRIX_FILE,
     annotateSpecificity,
 )
 
@@ -115,19 +116,23 @@ def addAnnotateParser(commands):
     parser.add_argument('--outdir', type=Path, required=True,
                         help='folder to write into, created if needed, each '
                              'file named after the reference\'s database and '
-                             'table (e.g. iedb_bcr_%s): <db>_<table>_%s (the '
-                             'annotation table), <db>_<table>_%s (one '
-                             '(query, reference) pair per row with its score: '
-                             'the hits of an exact match; with '
-                             '--identity-threshold, every pair through '
-                             '--partition-by\'s gate, whatever its distance, '
-                             'with within_threshold marking the hits) and '
+                             'table (e.g. iedb_bcr_%s): <db>_<table>_%s (each '
+                             'query row\'s best hits -- the highest identity, '
+                             'all of them on a tie -- with their antigen, '
+                             'epitope and antigen source species) and '
                              '<db>_<table>_%s (the options, inputs and '
                              'counts of this run). A reference not downloaded '
                              'by `immvoke specificity` is named by its file '
                              'name alone'
-                             % (ANNOTATION_FILE, ANNOTATION_FILE, PAIRS_FILE,
-                                ANNOTATION_METADATA))
+                             % (ANNOTATION_FILE, ANNOTATION_FILE, ANNOTATION_METADATA))
+    parser.add_argument('--full-dist-matrix', dest='full_dist_matrix',
+                        action='store_true',
+                        help='also write <db>_<table>_%s: every hit within '
+                             '--identity-threshold, not only the best ones, '
+                             'one row per (query sequence_id, hit_id, '
+                             'identity); under --paired, each antibody\'s '
+                             'hits and the chains they matched on'
+                             % FULL_MATRIX_FILE)
 
 
 def handleAnnotate(args):
@@ -146,6 +151,7 @@ def handleAnnotate(args):
         sequence_region=args.sequence_region, partition_by=args.partition_by,
         paired=args.paired, identity_threshold=args.identity_threshold,
         distance_metric=args.distance_metric, threads=args.threads,
-        outdir=args.outdir, count_field=args.count_field)
+        outdir=args.outdir, count_field=args.count_field,
+        full_dist_matrix=args.full_dist_matrix)
 
     return 0

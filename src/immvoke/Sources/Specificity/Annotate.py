@@ -2,10 +2,10 @@
 Antigen specificity annotation: query-vs-reference receptor comparison
 
 For each row of a query AIRR table, find every row of a fixed reference AIRR
-table it agrees with -- one annotation per query row (its `sequence_id`,
-`n_hits_total`, `is_unique_hit`, `hit_ids`), plus one scored row per
-(query, reference) pair: the hits of an exact match, or every pair through
-the gates below an exact match. This is the last pipeline stage: download a
+table it agrees with, and report its best hits -- one annotation per query
+row (its `sequence_id`, `n_hits`, `identity`, `hit_ids` and each hit's
+`antigen`, `epitope` and `antigen_source_species`), plus, on request, every
+hit within the threshold (full_dist_matrix). This is the last pipeline stage: download a
 specificity database's table, which lands as an AIRR rearrangement TSV in
 the database's own folder (`immvoke specificity iedb download bcr`), then
 annotate a user's own AIRR table against it as the reference, into an output
@@ -73,13 +73,27 @@ LIGHT_LOCI = ('IGK', 'IGL')
 #: cell in paired annotation, unless the caller names another.
 DEFAULT_COUNT_FIELD = 'duplicate_count'
 
-#: What annotateSpecificity writes into its outdir: the result, the
-#: (query, reference) pairs behind it, and the record of the run -- each
-#: name prefixed with the reference's database and table (_outputPrefix),
-#: e.g. iedb_bcr_annotation.tsv.
+#: What annotateSpecificity writes into its outdir: the result, the record
+#: of the run and, with full_dist_matrix, every hit within the threshold --
+#: each name prefixed with the reference's database and table
+#: (_outputPrefix), e.g. iedb_bcr_annotation.tsv.
 ANNOTATION_FILE = 'annotation.tsv'
-PAIRS_FILE = 'annotation_pairs.tsv'
 ANNOTATION_METADATA = 'annotation_metadata.yml'
+FULL_MATRIX_FILE = 'annotation_full_matrix.txt'
+
+#: What the result reports about each best hit -> the reference column it
+#: comes from (IEDB's, see Iedb.py); a reference without one leaves it blank.
+HIT_ANNOTATIONS = (
+    ('antigen', 'iedb_antigen'),
+    ('epitope', 'iedb_epitope_name'),
+    ('antigen_source_species', 'iedb_antigen_source_species'),
+)
+#: Separates hits in hit_ids and HIT_ANNOTATIONS' columns -- not a comma,
+#: which IEDB's discontinuous epitope names ('G58, L59, ...') are full of.
+HIT_SEP = ';'
+#: Separates one hit's values when it stands for several reference rows:
+#: IEDB lists a receptor once per epitope, all under its sequence_id.
+VALUE_SEP = ' | '
 
 #: Slack added before truncating a fraction-of-length threshold to a count,
 #: so float error can't drop it by one (e.g. (1 - 0.9) * 10 is 0.99999...).
@@ -318,8 +332,10 @@ def runPairedExactAnnotation(queries, reference, cdr3_col='cdr3_aa',
 #             -> partition_by gate (none, V, VJ, VJ + CDR3 length)
 #             -> identity_threshold: 1.0 exact, below it Hamming/Levenshtein
 #             -> symscan; rows beyond its limits are scored directly instead
-#     then    -> outdir: ANNOTATION_FILE, PAIRS_FILE and ANNOTATION_METADATA,
-#                each named after the reference (e.g. iedb_bcr_annotation.tsv)
+#     then    -> each query row's best hits (_bestHits)
+#             -> outdir: ANNOTATION_FILE, ANNOTATION_METADATA and, with
+#                full_dist_matrix, FULL_MATRIX_FILE, each named after the
+#                reference (e.g. iedb_bcr_annotation.tsv)
 
 #: sequence_region -> AIRR column(s) to compare. 'CDRs' pools CDR1-3, so it
 #: only runs under Hamming distance (or an exact match), never Levenshtein:
@@ -574,9 +590,9 @@ def _requireAirr(frame, label):
 
 
 def _runSingleChain(queries, reference, compare_cols, gene_cols, exact_cols,
-                    threshold, metric, threads, all_pairs=False):
+                    threshold, metric, threads):
     """
-    Run one single-chain comparison through symscan, keeping the pairs too.
+    Run one single-chain comparison through symscan, keeping every hit.
 
     Arguments:
       queries (pandas.DataFrame): the query rows, already filtered.
@@ -588,15 +604,12 @@ def _runSingleChain(queries, reference, compare_cols, gene_cols, exact_cols,
       threshold (float): identity in (0.0, 1.0]; 1.0 is an exact match.
       metric (str): 'hamming' or 'levenshtein'.
       threads (int): symscan's thread pool; see annotateSpecificity.
-      all_pairs (bool): below an exact match, pair every query with every
-        reference through the gates, whatever the distance
-        (Distances.allPairDistances), instead of the hits only.
 
     Returns:
-      tuple: (one row per query row, the pairs) -- the hits, one row per
-      (query row, hit id), see Symscan.runSymscanAnnotation's
-      `return_pairs`; or, with `all_pairs`, an iterator of tables of every
-      gated pair, see Distances.allPairDistances.
+      tuple: (every hit within the threshold, one row per (query row, hit
+      id), closest first within a query row -- see
+      Symscan.runSymscanAnnotation's `return_pairs`; the query rows beyond
+      symscan's limits, scored directly instead).
     """
     exact = threshold >= 1.0
     # An exact match is 0 substitutions under either metric -- the same
@@ -606,8 +619,7 @@ def _runSingleChain(queries, reference, compare_cols, gene_cols, exact_cols,
     gates = dict(id_col=DEFAULT_ID_COL, exact_cols=exact_cols or None,
                  gene_cols=gene_cols or None)
 
-    # Deferred: Symscan and Distances build on this module's helpers.
-    from immvoke.Sources.Specificity.Distances import allPairDistances
+    # Deferred: Symscan builds on this module's helpers.
     from immvoke.Sources.Specificity.Symscan import runSymscanAnnotation
 
     options = dict(distance_type=distance_type, threshold_is_fraction=not exact,
@@ -615,36 +627,38 @@ def _runSingleChain(queries, reference, compare_cols, gene_cols, exact_cols,
     result, pairs = runSymscanAnnotation(queries, reference, compare_cols, tolerance,
                                          threads=threads, return_pairs=True,
                                          warn_skipped=False, **options)
-    result, found = _scoreSkippedRows(result, queries, reference, compare_cols,
-                                      tolerance, options)
-    if all_pairs and not exact:
-        pairs = allPairDistances(queries, reference, compare_cols, tolerance, **options)
-    elif len(found):
+    skipped = result.attrs['skipped_rows']
+    found = _scoreSkippedRows(skipped, queries, reference, compare_cols, tolerance,
+                              options)
+    if len(found):
         pairs = (pandas.concat([pairs, found[pairs.columns]])
-                 .sort_values('query_row', kind='stable').reset_index(drop=True))
+                 .sort_values(['query_row', 'mismatches'], kind='stable')
+                 .drop_duplicates(['query_row', 'reference_id'])
+                 .reset_index(drop=True))
 
-    return result, pairs
+    return pairs, skipped
 
 
-def _scoreSkippedRows(result, queries, reference, compare_cols, tolerance, options):
+def _scoreSkippedRows(rows, queries, reference, compare_cols, tolerance, options):
     """
-    Fill in the hits of the query rows beyond symscan's limits (see
-    Symscan.py) by scoring their pairs directly (Distances.allPairDistances),
-    so no row misses a hit -- slower, but only for those rows.
+    Find the hits of the query rows beyond symscan's limits (see Symscan.py)
+    by scoring their pairs directly (Distances.allPairDistances), so no row
+    misses a hit -- slower, but only for those rows.
 
     Arguments:
-      result (pandas.DataFrame): runSymscanAnnotation's result, its skipped
-        rows in `attrs['skipped_rows']`.
+      rows (list): those query rows, runSymscanAnnotation's
+        `attrs['skipped_rows']`.
       queries, reference, compare_cols, tolerance: as given to symscan.
       options (dict): the rest of symscan's keyword arguments.
 
     Returns:
-      tuple: (`result` with those rows' hits filled in, their hits as pairs
-      -- see Symscan.runSymscanAnnotation's `return_pairs`).
+      pandas.DataFrame: their hits as pairs, see
+      Symscan.runSymscanAnnotation's `return_pairs`; empty when there are
+      none.
     """
-    rows = numpy.array(result.attrs['skipped_rows'], dtype=numpy.int64)
+    rows = numpy.array(rows, dtype=numpy.int64)
     if not len(rows):
-        return result, pandas.DataFrame()
+        return pandas.DataFrame()
     log.info("%d query rows are beyond symscan's limits (see Symscan.py); scoring "
              'their pairs directly', len(rows))
 
@@ -657,19 +671,80 @@ def _scoreSkippedRows(result, queries, reference, compare_cols, tolerance, optio
     found = pairs[pairs['within_threshold']].drop(columns='within_threshold')
     found = found.assign(query_row=rows[found['query_row'].to_numpy(dtype=int)])
 
-    # The same summary symscan builds: closest first, as allPairDistances orders.
-    grouped = found.groupby('query_row', sort=True)
-    filled = pandas.DataFrame({'n_hits_total': grouped.size(),
-                               'min_mismatches': grouped['mismatches'].min().astype(float),
-                               'hit_ids': grouped['reference_id'].agg(';'.join)})
-    if 'mismatch_positions' in result.columns:
-        filled['mismatch_positions'] = grouped['mismatch_positions'].agg(';'.join)
-    filled['is_unique_hit'] = filled['n_hits_total'] <= 1
-    result = result.copy()
-    for col in filled.columns:
-        result.loc[filled.index, col] = filled[col].to_numpy()
+    return found.reset_index(drop=True)
 
-    return result, found.reset_index(drop=True)
+
+def _hitValues(reference):
+    """
+    What each reference id says for HIT_ANNOTATIONS: its distinct values
+    across every row with that id, VALUE_SEP joined in reference order.
+
+    Arguments:
+      reference (pandas.DataFrame): the reference rows that were compared.
+
+    Returns:
+      dict: result column -> {reference id -> text}; a column the reference
+      lacks maps every id to ''.
+    """
+    ids = reference[DEFAULT_ID_COL].astype(str)
+    values = {}
+    for name, column in HIT_ANNOTATIONS:
+        if column not in reference.columns:
+            values[name] = {}
+            continue
+        text = reference[column].astype(object).fillna('').astype(str)
+        values[name] = {
+            hit: VALUE_SEP.join(dict.fromkeys(x for x in group if x))
+            for hit, group in text.groupby(ids.to_numpy(), sort=False)}
+
+    return values
+
+
+def _bestHits(pairs, n_queries, reference):
+    """
+    Summarize each query row by its best hits: the ones with the highest
+    identity, all of them on a tie.
+
+    Arguments:
+      pairs (pandas.DataFrame): every hit, from _runSingleChain.
+      n_queries (int): how many query rows were compared; one without a
+        hit still gets a row.
+      reference (pandas.DataFrame): the reference rows that were compared,
+        for HIT_ANNOTATIONS.
+
+    Returns:
+      pandas.DataFrame: one row per query row: `query_row`, `n_hits` (how
+      many best hits), `identity` (theirs, to 4 decimals), `hit_ids` and
+      HIT_ANNOTATIONS' columns, one entry per hit, HIT_SEP joined in the
+      same order; 0 hits and blanks for a query row without one.
+    """
+    names = [name for name, _ in HIT_ANNOTATIONS]
+    columns = ['query_row', 'n_hits', 'identity', 'hit_ids'] + names
+    result = pandas.DataFrame({'query_row': numpy.arange(n_queries)})
+
+    if len(pairs):
+        # One query row's identities share its length, so the fewest
+        # mismatches is the highest identity, without comparing floats.
+        fewest = pairs.groupby('query_row')['mismatches'].transform('min')
+        best = pairs[pairs['mismatches'] == fewest]
+        values = _hitValues(reference)
+        grouped = best.groupby('query_row', sort=True)
+        hits = pandas.DataFrame({
+            'n_hits': grouped.size(),
+            'identity': grouped['identity'].first().round(4),
+            'hit_ids': grouped['reference_id'].agg(HIT_SEP.join)})
+        for name in names:
+            hits[name] = grouped['reference_id'].agg(
+                lambda ids, lookup=values[name]: HIT_SEP.join(lookup.get(x, '')
+                                                              for x in ids))
+        result = result.join(hits, on='query_row')
+
+    result = result.reindex(columns=columns)
+    result['n_hits'] = result['n_hits'].fillna(0).astype(int)
+    for name in ['hit_ids'] + names:
+        result[name] = result[name].astype(object).fillna('').astype(str)
+
+    return result
 
 
 def _withQueryIds(table, queries):
@@ -765,19 +840,18 @@ def _outputPrefix(reference, source):
     return '%s_%s' % (source, table)
 
 
-def _writeOutputs(outdir, prefix, result, pairs, metadata):
+def _writeOutputs(outdir, prefix, result, matrix, metadata):
     """
-    Write the annotation bundle into `outdir`: ANNOTATION_FILE, PAIRS_FILE
-    and ANNOTATION_METADATA, each named `<prefix>_<name>`.
+    Write the annotation bundle into `outdir`: ANNOTATION_FILE,
+    ANNOTATION_METADATA and, when there is a matrix, FULL_MATRIX_FILE, each
+    named `<prefix>_<name>`.
 
     Arguments:
       outdir (str): the folder to write into, or None to skip writing.
       prefix (str): the reference's name, from _outputPrefix.
       result (pandas.DataFrame): the annotation result.
-      pairs (pandas.DataFrame or iterator): the (query, reference) pairs,
-        as one table or as tables to write one after another (see
-        Distances.allPairDistances). Their count goes into the metadata's
-        `results`, with how many are `within_threshold` when they say.
+      matrix (pandas.DataFrame): every hit within the threshold, one row per
+        (query, hit), or None when full_dist_matrix was not asked for.
       metadata (dict): the run record, see annotateSpecificity.
     """
     if outdir is None:
@@ -788,32 +862,22 @@ def _writeOutputs(outdir, prefix, result, pairs, metadata):
     yaml.safe_dump(metadata)
     out = Path(outdir)
     out.mkdir(parents=True, exist_ok=True)
-    names = ['%s_%s' % (prefix, name)
-             for name in (ANNOTATION_FILE, PAIRS_FILE, ANNOTATION_METADATA)]
+    names = ['%s_%s' % (prefix, name) for name in (ANNOTATION_FILE, ANNOTATION_METADATA)]
     result.to_csv(out / names[0], sep='\t', index=False)
-
-    counts = {'pairs': 0}
-    tables = [pairs] if isinstance(pairs, pandas.DataFrame) else pairs
-    for number, table in enumerate(tables):
+    if matrix is not None:
+        names.append('%s_%s' % (prefix, FULL_MATRIX_FILE))
         # Identity to 4 decimals: 0.4231, not 0.42307692307692313.
-        table = table.round({'identity': 4})
-        table.to_csv(out / names[1], sep='\t', index=False, mode='w' if number == 0
-                     else 'a', header=number == 0)
-        counts['pairs'] += len(table)
-        if 'within_threshold' in table.columns:
-            counts['pairs_within_threshold'] = (counts.get('pairs_within_threshold', 0)
-                                                + int(table['within_threshold'].sum()))
-    metadata['results'].update(counts)
-    # Stamped last: scoring every gated pair happens as its tables are written.
+        matrix.round({'identity': 4}).to_csv(out / names[-1], sep='\t', index=False)
     metadata['finished'] = timestamp()
-    (out / names[2]).write_text(yaml.safe_dump(metadata, sort_keys=False))
-    log.info('wrote %s into %s (%d pairs)', ', '.join(names), out, counts['pairs'])
+    (out / names[1]).write_text(yaml.safe_dump(metadata, sort_keys=False))
+    log.info('wrote %s into %s', ', '.join(names), out)
 
 
 def annotateSpecificity(query, reference, sequence_region='CDR3H',
                         partition_by=None, paired=False, identity_threshold=None,
                         distance_metric='hamming', threads=1,
-                        outdir=None, count_field=DEFAULT_COUNT_FIELD):
+                        outdir=None, count_field=DEFAULT_COUNT_FIELD,
+                        full_dist_matrix=False):
     """
     Annotate a query receptor table against a reference specificity table.
 
@@ -858,24 +922,26 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
       outdir (str): if given, also write into this folder, each file named
         after the reference's database and table (e.g.
         iedb_bcr_annotation.tsv; see _outputPrefix): ANNOTATION_FILE (the
-        result), PAIRS_FILE (one row per (query, reference) pair:
-        `sequence_id`, `reference_id`, `mismatches`, `identity`, plus
-        `mismatch_positions` under Hamming -- the hits of an exact match,
-        or, below it, every pair through the gates whatever its distance,
-        with `within_threshold` marking the hits (Distances.py); under
-        `paired`, the hits: `cell_id`, `hit_id` and `matched_chains` --
-        `both`, `heavy` or `light`) and ANNOTATION_METADATA (the
-        options, the query and reference with the reference's source
-        database, the counts, and the immvoke version, time and command).
+        result) and ANNOTATION_METADATA (the options, the query and
+        reference with the reference's source database, the counts, and
+        the immvoke version, time and command).
+      full_dist_matrix (bool): also write FULL_MATRIX_FILE into `outdir`:
+        every hit within the threshold, not only the best ones, one row per
+        (query, hit) -- `sequence_id`, `hit_id`, `identity`; under
+        `paired`, `cell_id`, `hit_id` and `matched_chains` (`both`, `heavy`
+        or `light`).
 
     Returns:
       pandas.DataFrame: when `paired`, one row per query `cell_id` (see
       runPairedExactAnnotation); otherwise one row per heavy chain query
       row, every one of them -- 0 hits if unmatched -- with `sequence_id`
       (the query's own; `query_row`, its position among the heavy chain
-      rows, for a query without that column), `n_hits_total`,
-      `min_mismatches`, `is_unique_hit`, `hit_ids` (plus
-      `mismatch_positions` under Hamming).
+      rows, for a query without that column), then its best hits, the ones
+      with the highest identity (all of them on a tie): `n_hits`,
+      `identity`, `hit_ids`, and each hit's `antigen`, `epitope` and
+      `antigen_source_species` from the reference (HIT_ANNOTATIONS), one
+      entry per hit, HIT_SEP joined in hit_ids order, a hit standing for
+      several reference rows joining its values with VALUE_SEP.
 
     Raises:
       AnnotationError: if the reference is not an AIRR rearrangement table,
@@ -905,7 +971,8 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
                                         ('paired', paired),
                                         ('identity_threshold', identity_threshold),
                                         ('distance_metric', distance_metric),
-                                        ('count_field', count_field))},
+                                        ('count_field', count_field),
+                                        ('full_dist_matrix', full_dist_matrix))},
     }
     # Run through the commandline rather than called from Python, where
     # sys.argv is some other program's.
@@ -936,8 +1003,10 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
                  ', '.join('%s=%d' % item for item in classes.items()))
         metadata['results'] = {
             'query_antibodies': len(result), 'classification': classes,
-            'skipped_query_rows': result.attrs['skipped_query_rows']}
-        _writeOutputs(outdir, prefix, result, pairs, metadata)
+            'skipped_query_rows': result.attrs['skipped_query_rows'],
+            'pairs': len(pairs)}
+        _writeOutputs(outdir, prefix, result, pairs if full_dist_matrix else None,
+                      metadata)
 
         return result
 
@@ -968,19 +1037,20 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
         ref = ref.assign(**{_CDR3_LENGTH_COL: ref['cdr3_aa'].str.len().astype(str)})
         exact_cols = [_CDR3_LENGTH_COL]
 
-    # Every gated pair is only scored when there is a pairs file to take it.
-    result, pairs = _runSingleChain(queries, ref, compare_cols, gene_cols,
-                                    exact_cols, threshold, metric, threads,
-                                    all_pairs=outdir is not None)
-    hit = int(result['n_hits_total'].gt(0).sum())
-    log.info('%d query rows, %d with at least one hit, %d unique (0 or 1 hit)',
-             len(result), hit, int(result['is_unique_hit'].sum()))
+    pairs, skipped = _runSingleChain(queries, ref, compare_cols, gene_cols,
+                                     exact_cols, threshold, metric, threads)
+    result = _bestHits(pairs, len(queries), ref)
+    hit = int(result['n_hits'].gt(0).sum())
+    log.info('%d query rows, %d with at least one hit, %d hits within the '
+             'threshold in all', len(result), hit, len(pairs))
     metadata['results'] = {
         'query_rows_compared': len(result), 'query_rows_with_hits': hit,
-        'query_rows_scored_directly': len(result.attrs['skipped_rows'])}
+        'query_rows_scored_directly': len(skipped), 'hits': len(pairs)}
     result = _withQueryIds(result, queries)
-    pairs = (_withQueryIds(pairs, queries) if isinstance(pairs, pandas.DataFrame)
-             else (_withQueryIds(table, queries) for table in pairs))
-    _writeOutputs(outdir, prefix, result, pairs, metadata)
+    matrix = None
+    if full_dist_matrix:
+        matrix = _withQueryIds(pairs[['query_row', 'reference_id', 'identity']]
+                               .rename(columns={'reference_id': 'hit_id'}), queries)
+    _writeOutputs(outdir, prefix, result, matrix, metadata)
 
     return result

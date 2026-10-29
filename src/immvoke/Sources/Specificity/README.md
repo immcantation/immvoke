@@ -111,6 +111,7 @@ and, given `outdir`, writes the same files the command does.
 | `--count-field` | `count_field` | an AIRR count column; `duplicate_count` (default) | `--paired`: which of a query cell's several heavy (or light) chains to keep -- the highest count |
 | `--threads` | `threads` | `1` (default); `-1` for every core | symscan's threads |
 | `--outdir` | `outdir` | folder, created if needed | where to write this run's files (see Output) |
+| `--full-dist-matrix` | `full_dist_matrix` | flag | also write every hit within the threshold, not only the best ones (see Output) |
 
 `--partition-by` is off by default, but an unpartitioned CDR3 comparison at
 a loose threshold is prone to coincidental hits, especially on short CDR3s,
@@ -148,16 +149,16 @@ immvoke annotate --query mine.tsv --reference databases/iedb/iedb_bcr.tsv \
 
 ### Output
 
-Each run writes three files into its `--outdir`, kept apart from the
+Each run writes two files into its `--outdir`, kept apart from the
 downloaded databases, each named after the reference's database and table,
-`<db>_<table>_`:
+`<db>_<table>_`, and a third with `--full-dist-matrix`:
 
 ```
 annotation/exact/
-├── iedb_bcr_annotation.tsv            # one row per query: its hits
-├── iedb_bcr_annotation_pairs.tsv      # one row per (query, reference) pair, scored
-└── iedb_bcr_annotation_metadata.yml   # the options, query, reference and its
-                                       # database, counts, version, time and command
+├── iedb_bcr_annotation.tsv               # one row per query: its best hits
+├── iedb_bcr_annotation_metadata.yml      # the options, query, reference and its
+│                                         # database, counts, version, time and command
+└── iedb_bcr_annotation_full_matrix.txt   # --full-dist-matrix: every hit, one per row
 ```
 
 The database is read off the `download_metadata.yml` that `immvoke
@@ -168,49 +169,35 @@ file name alone (`myref.tsv` gives `myref_annotation.tsv`), and a DataFrame
 passed from Python by `reference_`.
 
 `<db>_<table>_annotation.tsv`, without `--paired`, has one row per query
-heavy chain row, including rows with no hit:
+heavy chain row, including rows with no hit. Of a query's hits it keeps the
+**best**: the ones with the highest identity, all of them when several tie.
 
 | Column | Meaning |
 | --- | --- |
 | `sequence_id` | the query's own `sequence_id`, so the table joins straight back to the query file (`query_row`, its position among the heavy chain rows, for a query without that column) |
-| `n_hits_total` | how many reference rows matched |
-| `min_mismatches` | the closest hit's distance (edit distance under `levenshtein`) |
-| `is_unique_hit` | 0 or 1 hit |
-| `hit_ids` | the matching reference `sequence_id`s, closest first, `;`-joined |
-| `mismatch_positions` | Hamming only: the differing positions per hit |
+| `n_hits` | how many best hits (0 without a hit) |
+| `identity` | their identity, `1 - mismatches / query length` (an `X` counts as identical under `hamming`) |
+| `hit_ids` | their reference `sequence_id`s, `;`-joined |
+| `antigen` | each hit's antigen (`iedb_antigen`), in `hit_ids` order |
+| `epitope` | each hit's epitope (`iedb_epitope_name`) |
+| `antigen_source_species` | the organism each hit's antigen comes from (`iedb_antigen_source_species`) |
+
+Hits are separated by `;` rather than commas, since IEDB names a
+discontinuous epitope by its residues (`G58, L59, S61`). IEDB lists a
+receptor once per epitope it was tested against, all under its
+`sequence_id`, so one hit can stand for several epitopes; their values are
+joined with ` | ` within that hit's entry. A reference without IEDB's
+columns leaves those three blank.
 
 With `--paired`, one row per query antibody (`cell_id`): `classification`
 (`both`, `heavy_only`, `light_only`, `conflicting` or `neither`),
 `heavy_hit_ids`, `light_hit_ids` and `both_hit_ids`.
 
-`<db>_<table>_annotation_pairs.tsv` has one (query, reference) pair per
-row, each with its own score, by query and closest first:
-
-- an exact match (no `--identity-threshold`) lists its hits;
-- a Hamming or Levenshtein run lists **every pair through the filters you
-  chose** -- `--partition-by`'s gene gate (and CDR3 length under `VJL`), no
-  blank sequences, and under Hamming same-length pairs only -- whatever its
-  distance, with `within_threshold` marking the hits. Without
-  `--partition-by` that is every query against every reference: for one
-  repertoire against IEDB, millions of rows under Hamming and some 10^8
-  under Levenshtein, so `--partition-by VJ` keeps it to a manageable size.
-
-| Column | Meaning |
-| --- | --- |
-| `sequence_id` | the query, as above |
-| `reference_id` | the reference `sequence_id` |
-| `mismatches` | this pair's distance (edit distance under `levenshtein`) |
-| `identity` | `1 - mismatches / query length` (an `X` counts as identical under `hamming`) |
-| `within_threshold` | Hamming/Levenshtein runs: whether the pair is a hit |
-| `mismatch_positions` | Hamming only: this pair's differing positions |
-
-With `--paired`, the hits: `cell_id`, `hit_id` (a reference `cell_id`) and
-`matched_chains` (`both`, `heavy` or `light`).
-
-IEDB lists a receptor once per epitope it was tested against: each record
-gets its own `cell_id`, but the chains keep the receptor's `sequence_id`, so
-one id in `hit_ids` can stand for several reference rows. Join `hit_ids`
-back to the reference on `sequence_id` to see every epitope behind a hit.
+`<db>_<table>_annotation_full_matrix.txt`, with `--full-dist-matrix`, lists
+every hit within `--identity-threshold`, not only the best ones: one row
+per (query, hit), by query and closest first -- `sequence_id`, `hit_id`
+and `identity`. With `--paired`, each antibody's hits: `cell_id`, `hit_id`
+(a reference `cell_id`) and `matched_chains` (`both`, `heavy` or `light`).
 
 Reference command: `immvoke specificity iedb download bcr --help`,
 `immvoke annotate --help`.

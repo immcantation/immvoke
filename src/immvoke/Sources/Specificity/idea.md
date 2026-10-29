@@ -22,24 +22,18 @@ always run; the others are set with the option shown (the
 | 6 | How close is a hit | `--identity-threshold` | a fraction in (0, 1] | exact |
 | 7 | Distance | `--distance-metric` | `hamming`, `levenshtein` | `hamming` |
 | 8 | Search | *automatic* | symscan; rows too large for it are scored directly instead, and counted in `annotation_metadata.yml` | -- |
-| 9 | Output | `--outdir` (`outdir` in Python) | `annotation.tsv` (also returned as a DataFrame), `annotation_pairs.tsv` (one scored (query, reference) pair per row) and `annotation_metadata.yml`, each prefixed with the reference's database and table (`iedb_bcr_annotation.tsv`) | -- |
+| 9 | Output | `--outdir` (`outdir` in Python), `--full-dist-matrix` | `annotation.tsv` (each query's best hits, also returned as a DataFrame) and `annotation_metadata.yml`, plus `annotation_full_matrix.txt` (every hit within the threshold) with `--full-dist-matrix`, each prefixed with the reference's database and table (`iedb_bcr_annotation.tsv`) | -- |
 
 With `--paired` on, steps 3-7 are replaced by one fixed comparison: an
 antibody (`cell_id`) matches a reference antibody only if both its heavy and
 its light chain have the same V gene, the same J gene and an exact CDR3 --
 classified `both`, `heavy_only`, `light_only`, `conflicting` or `neither`.
 Without it, every query heavy chain row gets one result row, 0 hits if
-unmatched (`n_hits_total`, `hit_ids`, ...). `annotation_pairs.tsv` has one
-row per (query, reference) pair with that pair's own `mismatches` and
-`identity`, where the result table keeps only the closest hit's distance.
-An exact match lists its hits. Below an exact match (Hamming or
-Levenshtein) it lists **every pair through the gates you chose**, whatever
-its distance, with `within_threshold` marking the hits: the gene gate
-(`--partition-by`), CDR3 length under `VJL`, no blanks -- and, under
-Hamming, only same-length pairs, the only ones Hamming distance is defined
-for. Without `--partition-by` that is every query against every reference
-(for one repertoire against IEDB, millions of rows under Hamming and some
-10^8 under Levenshtein).
+unmatched: its best hits -- the highest identity, all of them on a tie --
+with `n_hits`, `identity`, `hit_ids` and each hit's `antigen`, `epitope`
+and `antigen_source_species` from the reference, `;` between hits.
+`annotation_full_matrix.txt` (`--full-dist-matrix`) lists every hit within
+the threshold, one (query, hit, identity) per row.
 
 The output files are named after the reference, `<db>_<table>_` -- the
 database read off the `download_metadata.yml` `immvoke specificity` writes
