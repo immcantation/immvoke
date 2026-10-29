@@ -138,11 +138,16 @@ class TestFilterHelp(unittest.TestCase):
         self.assertIn('--air_species SPECIES', text)
         self.assertIn('--antigen_species ORGANISM', text)
         self.assertIn('--antigen_structure_type TYPE', text)
+        self.assertIn('--assay_type ASSAY', text)
+        self.assertIn('--disease DISEASE', text)
+        self.assertIn('--paired_only ', text)
         self.assertIn('one of: Positive, Negative', text)
         self.assertIn('Mus musculus BALB/c', text)
         self.assertNotIn('default: None', text)
-        args = parser.parse_args(['--air_species', 'Homo sapiens'])
+        args = parser.parse_args(['--air_species', 'Homo sapiens', '--paired_only'])
         self.assertEqual(args.filter_air_species, 'Homo sapiens')
+        self.assertIs(args.filter_paired_only, True)
+        self.assertIsNone(parser.parse_args([]).filter_paired_only)
 
 
 class TestSearch(unittest.TestCase):

@@ -3,7 +3,8 @@ IEDB - B-cell and T-cell receptor sequences with their epitopes and assays
 
 IEDB (https://www.iedb.org/) publishes receptor sequences as a single bulk
 ZIP export; its PostgREST API (https://query-api.iedb.org/api/v1) is used
-only to look up the antigen organisms of those receptors' epitopes. A table
+only to look up what the export leaves out: the antigens of those
+receptors' epitopes, and, when filtered on, their assays. A table
 is not an index into many separately downloadable files: the table itself
 *is* the data unit, so each table produces exactly one DataUnit.
 
@@ -17,9 +18,11 @@ and carrying the epitope and assay context alongside. They are already AIRR,
 so normalizeChunk passes them through, adding only provenance columns. Every
 receptor species is kept unless --air_species names one (see
 RECEPTOR_SPECIES and _speciesCells), every antigen unless
---antigen_species names its organism (see _antigenEpitopes), and every
+--antigen_species names its organism (see _antigenEpitopes), every
 epitope structure unless --antigen_structure_type names one (see
-_structureEpitopes). Each record
+_structureEpitopes), every assay type and disease unless --assay_type or
+--disease names one (see _typeAssays and _diseaseAssays), and single
+chains unless --paired_only asks for both (see _pairedCells). Each record
 already carries its epitope, assay ids and outcome, so IEDB's separate
 B-cell assay tables (bcell_search, bcr_to_bcell) are not offered.
 """
@@ -42,7 +45,7 @@ import pandas
 from immvoke.Convert import coerceAirrTypes
 from immvoke.Exceptions import IedbParseError, SchemaError
 from immvoke.Http import hashFile
-from immvoke.Sources.Base import DataUnit, DownloadResult, SourceBase
+from immvoke.Sources.Base import DataUnit, DownloadResult, Query, SourceBase
 from immvoke.Sources.Specificity.Paginate import pageByRange
 from immvoke.Sources.Specificity.Report import humanDuration, humanPath
 from immvoke.Sources.Specificity.RowHash import rowHashes
@@ -147,9 +150,35 @@ _ANTIGEN_SPECIES_EXAMPLES = ('Influenza A virus', 'SARS-CoV2',
 _ANTIGEN_STRUCTURE_TYPES = ('Linear peptide', 'Discontinuous peptide',
                             'Discontinuous peptide on multi chain', 'Non-peptidic')
 
+#: --assay_type and --disease take any assay type or disease IEDB uses for
+#: the table's assays, so the schema carries only these as examples (see
+#: Field.open_values). An assay type is the first part of IEDB's
+#: assay_names: 'neutralization' of 'neutralization |biological activity'.
+_ASSAY_TYPE_EXAMPLES = ('neutralization', '3D structure', 'qualitative binding',
+                        'dissociation constant KD')
+_DISEASE_EXAMPLES = ('COVID-19', 'influenza', 'rheumatoid arthritis',
+                     'viral infectious disease')
+
 #: Epitope ids asked for per epitope_search request (see _epitopeRecords);
-#: keeps each request URL a few kilobytes long.
+#: keeps each request URL a few kilobytes long. Assay ids likewise (see
+#: _assayRecords).
 EPITOPE_BATCH = 300
+
+#: table -> IEDB's assay search endpoint and its id field.
+_ASSAY_SEARCH = {
+    'bcr': ('bcell_search', 'bcell_id'),
+    'tcr': ('tcell_search', 'tcell_id'),
+}
+
+#: --paired_only: the chains a receptor needs, one of each side of a pair:
+#: a heavy chain and a light chain, a beta and an alpha, or a delta and a
+#: gamma.
+CHAIN_PAIRS = (
+    ('IGH', frozenset(['IGK', 'IGL'])),
+    ('TRB', frozenset(['TRA'])),
+    ('TRD', frozenset(['TRG'])),
+)
+_LOCI = frozenset(['IGH', 'IGK', 'IGL', 'TRA', 'TRB', 'TRD', 'TRG'])
 
 #: The columns added to bcr and tcr from each record's epitope: its
 #: antigen, the organism that antigen comes from, and the epitope's
@@ -331,6 +360,199 @@ def _epitopeAntigens(records):
 
     return antigens
 
+
+def _intersect(*sets):
+    """
+    What every given set keeps: their intersection, ignoring the None of a
+    filter not given, and None when none was given.
+    """
+    given = [x for x in sets if x is not None]
+
+    return frozenset.intersection(*given) if given else None
+
+
+def _assayRecords(client, path, chunksize, table):
+    """
+    Look up the assays of a receptor AIRR table on IEDB's bcell_search (bcr)
+    or tcell_search (tcr).
+
+    The AIRR export lists each record's assays (iedb_assay_ids) but not what
+    they were or the disease studied, so this asks the API about the table's
+    own assays, in batches of EPITOPE_BATCH. Only --assay_type and --disease
+    need it, so it runs only when one of them is given; given both, a record
+    is kept when one of its assays is of that type and studied that disease.
+
+    Arguments:
+      client (HttpClient): the shared HTTP client.
+      path (Path): the downloaded AIRR TSV.
+      chunksize (int): rows per chunk while scanning it.
+      table (str): bcr or tcr.
+
+    Returns:
+      list: records with `id` (the assay id, as text), assay_names,
+      disease_names, disease_iris and disease_iri_search (each disease and
+      every disease above it).
+    """
+    endpoint, id_field = _ASSAY_SEARCH[table]
+    ids = set()
+    for chunk in pandas.read_csv(path, sep='\t', dtype=str, na_filter=False,
+                                 usecols=['iedb_assay_ids'], chunksize=chunksize):
+        for value in chunk['iedb_assay_ids']:
+            ids.update(x.strip() for x in value.split(',') if x.strip())
+    numbers = sorted(ids, key=int)
+    log.info('  assays: looking up %s assays on IEDB', format(len(numbers), ','))
+
+    records = []
+    for start in range(0, len(numbers), EPITOPE_BATCH):
+        params = {'select': '%s,assay_names,disease_names,disease_iris,'
+                            'disease_iri_search' % id_field,
+                  id_field: 'in.(%s)' % ','.join(numbers[start:start + EPITOPE_BATCH])}
+        for batch in pageByRange(client, '%s/%s' % (API_BASE, endpoint),
+                                 page_size=API_PAGE_SIZE, params=params):
+            records.extend(dict(x, id=str(x[id_field])) for x in batch)
+
+    return records
+
+
+def _assayType(record):
+    """
+    An assay's type: the first part of IEDB's assay_names, so
+    'neutralization |biological activity' -> 'neutralization'.
+    """
+    return (record.get('assay_names') or '').split('|', 1)[0].strip()
+
+
+def _typeAssays(records, name):
+    """
+    The assays (iedb_assay_ids) of the type `name`, matched ignoring case.
+
+    Arguments:
+      records (list): assay records, from _assayRecords.
+      name (str): the --assay_type value.
+
+    Returns:
+      frozenset: the assay ids to keep.
+
+    Raises:
+      SchemaError: if none of the table's assays is of that type, naming
+        the closest types.
+    """
+    types = {}
+    for record in records:
+        types.setdefault(_assayType(record).lower(), _assayType(record))
+    wanted = name.strip().lower()
+    if wanted not in types:
+        close = difflib.get_close_matches(wanted, list(types), n=5, cutoff=0.5)
+        raise SchemaError(
+            "no assay type '%s' among this table's assays%s"
+            % (name, '; closest IEDB types: %s' % ', '.join(types[x] for x in close)
+               if close else ''))
+
+    kept = frozenset(record['id'] for record in records
+                     if _assayType(record).lower() == wanted)
+    log.info("  assay type '%s': %s of %s assays kept", types[wanted],
+             format(len(kept), ','), format(len(records), ','))
+
+    return kept
+
+
+def _diseaseAssays(records, name):
+    """
+    The assays (iedb_assay_ids) studying the disease `name` or one under it.
+
+    Like an antigen organism, a disease is matched ignoring case and paired
+    with its id only where an assay names a single disease; IEDB's
+    disease_iri_search lists each disease and every disease above it, so
+    'viral infectious disease' takes in COVID-19, influenza and the rest.
+
+    Arguments:
+      records (list): assay records, from _assayRecords.
+      name (str): the --disease value.
+
+    Returns:
+      frozenset: the assay ids to keep.
+
+    Raises:
+      SchemaError: if no assay of the table names that disease, naming the
+        closest ones.
+    """
+    diseases = {}
+    for record in records:
+        names = record.get('disease_names') or []
+        iris = record.get('disease_iris') or []
+        if len(names) == 1 and len(iris) == 1:
+            diseases.setdefault(names[0].lower(), (names[0], iris[0]))
+
+    wanted = name.strip().lower()
+    if wanted not in diseases:
+        close = difflib.get_close_matches(wanted, list(diseases), n=5, cutoff=0.6)
+        raise SchemaError(
+            "no disease named '%s' among this table's assays%s"
+            % (name, '; closest IEDB names: %s' % ', '.join(diseases[x][0] for x in close)
+               if close else ''))
+
+    own, iri = diseases[wanted]
+    kept = frozenset(record['id'] for record in records
+                     if iri in (record.get('disease_iri_search') or []))
+    log.info("  disease '%s' (%s): %s of %s assays kept", own, iri,
+             format(len(kept), ','), format(len(records), ','))
+
+    return kept
+
+
+def _chainLoci(chunk):
+    """
+    Each chain's locus: its locus, or, where IEDB left that blank, the locus
+    its V or J gene names (IGKV1-39*01 -> IGK).
+
+    Arguments:
+      chunk (pandas.DataFrame): records with locus, v_call and j_call.
+
+    Returns:
+      pandas.Series: the loci, blank where none is known.
+    """
+    loci = chunk['locus'].str.upper()
+    for column in ('v_call', 'j_call'):
+        guess = chunk[column].str[:3].str.upper()
+        loci = loci.where(loci.isin(_LOCI), guess)
+
+    return loci.where(loci.isin(_LOCI), '')
+
+
+def _pairedCells(path, chunksize, codes=None):
+    """
+    The receptors (cell_id) with both chains of a pair (see CHAIN_PAIRS),
+    for --paired_only.
+
+    Arguments:
+      path (Path): the downloaded AIRR TSV.
+      chunksize (int): rows per chunk while scanning it.
+      codes (frozenset): with --air_species, the wanted locus_species codes:
+        only chains of them count, since those are the only ones kept (see
+        _speciesCells). None counts every chain.
+
+    Returns:
+      frozenset: the cell_id values to keep.
+    """
+    loci = {}
+    for chunk in pandas.read_csv(path, sep='\t', dtype=str, na_filter=False,
+                                 usecols=['cell_id', 'locus', 'locus_species',
+                                          'v_call', 'j_call'],
+                                 chunksize=chunksize):
+        if codes is not None:
+            chunk = chunk[chunk['locus_species'].isin(codes)]
+        for cell, locus in zip(chunk['cell_id'], _chainLoci(chunk)):
+            loci.setdefault(cell, set()).add(locus)
+
+    kept = frozenset(cell for cell, found in loci.items()
+                     if cell and any(one in found and found & other
+                                     for one, other in CHAIN_PAIRS))
+    log.info('  paired only: %s receptors with both chains kept, %s with one dropped',
+             format(len(kept), ','), format(len(loci) - len(kept), ','))
+
+    return kept
+
+
 def _speciesCodes(name):
     """
     The locus_species codes an --air_species name stands for: the species'
@@ -449,7 +671,19 @@ class IedbSource(SourceBase):
                                            'structure_type; Discontinuous '
                                            'peptide includes its multi chain '
                                            'kind'),
+        'assay_type': ('ASSAY', 'the type of one of its assays: any type IEDB '
+                                'uses, ignoring case'),
+        'disease': ('DISEASE', 'the disease one of its assays studied: any name '
+                               'IEDB uses, ignoring case; a disease includes '
+                               'those under it'),
         'outcome': ('OUTCOME', 'the assay outcome, iedb_assay_outcome'),
+    }
+    #: On/off filters, outside the schema since they take no value; see
+    #: Search.addFilterGroup and validateQuery.
+    filter_switches = {
+        'paired_only': 'only receptors with both chains of a pair: a heavy and '
+                       'a light chain (IGH with IGK or IGL), a beta and an '
+                       'alpha, or a delta and a gamma',
     }
     search_columns = dict.fromkeys(collections, (
         ('iedb_receptor_group', 'receptor groups', 'distinct'),
@@ -495,7 +729,11 @@ class IedbSource(SourceBase):
                                 values=_ANTIGEN_SPECIES_EXAMPLES, open_values=True)
         antigen_structure_type = Field(name='antigen_structure_type',
                                        values=_ANTIGEN_STRUCTURE_TYPES)
-        receptor_fields = (air_species, antigen_species, antigen_structure_type, outcome)
+        assay_type = Field(name='assay_type', values=_ASSAY_TYPE_EXAMPLES,
+                           open_values=True)
+        disease = Field(name='disease', values=_DISEASE_EXAMPLES, open_values=True)
+        receptor_fields = (air_species, antigen_species, antigen_structure_type,
+                           assay_type, disease, outcome)
         collections = {
             'bcr': Collection(name='bcr', fields=receptor_fields),
             'tcr': Collection(name='tcr', fields=receptor_fields),
@@ -508,6 +746,25 @@ class IedbSource(SourceBase):
                           'exposes no HTML form)' % __version__),
             source_urls={'airr_bulk': BULK_URL, 'api': API_BASE},
             collections=collections)
+
+    def validateQuery(self, collection, filters):
+        """
+        Validate filters against the stored snapshot, letting the on/off
+        filters of filter_switches through: they take no value for the
+        schema to check.
+
+        Arguments:
+          collection (str): the table being searched.
+          filters (dict): user supplied filters.
+
+        Returns:
+          Query: the resolved query, a switch given as True.
+        """
+        switches = {k: True for k in self.filter_switches if filters.get(k)}
+        query = super().validateQuery(
+            collection, {k: v for k, v in filters.items() if k not in self.filter_switches})
+
+        return Query(collection=collection, filters={**query.filters, **switches})
 
     def searchUnits(self, query):
         """
@@ -599,32 +856,44 @@ class IedbSource(SourceBase):
 
         Returns:
           tuple: (metadata, iterator of raw record chunks). metadata holds
-          `kept_cells`, the receptors normalizeChunk keeps (see
-          _speciesCells), and `kept_epitopes`, the epitopes it keeps (see
-          _antigenEpitopes and _structureEpitopes, both applying when both
-          are given), each None to keep everything when its filter
-          (--air_species; --antigen_species, --antigen_structure_type) was
-          not given; and `antigens`, each epitope's antigen, source species
+          what normalizeChunk keeps: `kept_cells`, the receptors (see
+          _speciesCells, _pairedCells), `kept_epitopes`, the epitopes (see
+          _antigenEpitopes, _structureEpitopes) and `kept_assays`, the
+          assays (see _typeAssays, _diseaseAssays), each None to keep
+          everything when none of its filters was given and the records all
+          given filters agree on otherwise; `species_only`, whether
+          --air_species was given, so chains with no species recorded are
+          dropped; and `antigens`, each epitope's antigen, source species
           and structure type (see _epitopeAntigens). The table is read as
           text, blank cells as '' rather than NaN.
         """
-        filters = unit.metadata or {}
-        species = filters.get('air_species')
-        antigen = filters.get('antigen_species')
+        filters = {k: v for k, v in (unit.metadata or {}).items() if v not in (None, '*')}
+        species, antigen = filters.get('air_species'), filters.get('antigen_species')
         structure = filters.get('antigen_structure_type')
+        assay_type, disease = filters.get('assay_type'), filters.get('disease')
+
         records = _epitopeRecords(self.client, path, chunksize)
-        kept_epitopes = None
-        if antigen and antigen != '*':
-            kept_epitopes = _antigenEpitopes(records, antigen)
-        if structure and structure != '*':
-            by_structure = _structureEpitopes(records, structure)
-            kept_epitopes = (by_structure if kept_epitopes is None
-                             else kept_epitopes & by_structure)
+        kept_epitopes = _intersect(
+            _antigenEpitopes(records, antigen) if antigen else None,
+            _structureEpitopes(records, structure) if structure else None)
+
+        kept_assays = None
+        if assay_type or disease:
+            assays = _assayRecords(self.client, path, chunksize, unit.collection)
+            kept_assays = _intersect(
+                _typeAssays(assays, assay_type) if assay_type else None,
+                _diseaseAssays(assays, disease) if disease else None)
+
+        codes = _speciesCodes(species) if species else None
+        kept_cells = _intersect(
+            _speciesCells(path, chunksize, codes) if species else None,
+            _pairedCells(path, chunksize, codes) if filters.get('paired_only') else None)
+
         metadata = {
-            'kept_cells': (None if not species or species == '*'
-                           else _speciesCells(path, chunksize,
-                                              _speciesCodes(species))),
+            'species_only': species is not None,
+            'kept_cells': kept_cells,
             'kept_epitopes': kept_epitopes,
+            'kept_assays': kept_assays,
             'antigens': _epitopeAntigens(records),
         }
 
@@ -643,8 +912,8 @@ class IedbSource(SourceBase):
         them out.
 
         Arguments:
-          metadata (dict): from readUnit: `kept_cells`, `kept_epitopes` and
-            `antigens`.
+          metadata (dict): from readUnit: `species_only`, `kept_cells`,
+            `kept_epitopes`, `kept_assays` and `antigens`.
           chunk (pandas.DataFrame): raw records, IEDB's own columns.
           unit (DataUnit): what they came from.
           offset (int): unused; kept for interface parity with SourceBase.
@@ -657,10 +926,16 @@ class IedbSource(SourceBase):
         report['rows_in'] += len(chunk)
         frame = chunk
         if metadata['kept_cells'] is not None:
-            frame = frame[frame['cell_id'].isin(metadata['kept_cells'])
-                          & (frame['locus_species'] != '')]
+            frame = frame[frame['cell_id'].isin(metadata['kept_cells'])]
+        if metadata['species_only']:
+            frame = frame[frame['locus_species'] != '']
         if metadata['kept_epitopes'] is not None:
             frame = frame[frame['reactivity_ref'].isin(metadata['kept_epitopes'])]
+        if metadata['kept_assays'] is not None:
+            kept = metadata['kept_assays']
+            frame = frame[pandas.Series([any(x.strip() in kept for x in ids.split(','))
+                                         for ids in frame['iedb_assay_ids']],
+                                        index=frame.index, dtype=bool)]
         outcome = (unit.metadata or {}).get('outcome')
         if outcome and outcome != '*':
             frame = frame[frame['iedb_assay_outcome'].str.lower() == outcome.lower()]

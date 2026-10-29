@@ -100,7 +100,8 @@ def addFilterGroup(parser, schema, source, table):
     Each flag's placeholder and description come from the source's
     filter_help, and its values from the schema snapshot: listed inline when
     there are a few, in columns when there are more, as examples when the
-    source checks the value itself (Field.open_values).
+    source checks the value itself (Field.open_values). The source's
+    filter_switches, if any, follow as flags that take no value.
 
     Arguments:
       parser (ArgumentParser): the table's subparser.
@@ -132,6 +133,9 @@ def addFilterGroup(parser, schema, source, table):
 
         group.add_argument(item.flag, dest='filter_%s' % item.name,
                            metavar=metavar, default=None, help='\n'.join(lines))
+    for name, what in getattr(source, 'filter_switches', {}).items():
+        group.add_argument('--%s' % name, dest='filter_%s' % name, action='store_true',
+                           default=None, help=what)
 
 
 def searchTable(source, table, filters, workdir):

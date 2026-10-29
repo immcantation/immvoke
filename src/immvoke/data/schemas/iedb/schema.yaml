@@ -75,6 +75,24 @@ collections:
       - Discontinuous peptide
       - Discontinuous peptide on multi chain
       - Non-peptidic
+    - name: assay_type
+      wildcard: '*'
+      pseudo_values: false
+      open_values: true
+      values:
+      - neutralization
+      - 3D structure
+      - qualitative binding
+      - dissociation constant KD
+    - name: disease
+      wildcard: '*'
+      pseudo_values: false
+      open_values: true
+      values:
+      - COVID-19
+      - influenza
+      - rheumatoid arthritis
+      - viral infectious disease
     - name: outcome
       wildcard: '*'
       pseudo_values: false
@@ -147,6 +165,24 @@ collections:
       - Discontinuous peptide
       - Discontinuous peptide on multi chain
       - Non-peptidic
+    - name: assay_type
+      wildcard: '*'
+      pseudo_values: false
+      open_values: true
+      values:
+      - neutralization
+      - 3D structure
+      - qualitative binding
+      - dissociation constant KD
+    - name: disease
+      wildcard: '*'
+      pseudo_values: false
+      open_values: true
+      values:
+      - COVID-19
+      - influenza
+      - rheumatoid arthritis
+      - viral infectious disease
     - name: outcome
       wildcard: '*'
       pseudo_values: false

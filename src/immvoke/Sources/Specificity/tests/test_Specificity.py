@@ -18,7 +18,7 @@ from unittest import mock
 import pandas
 
 # Immvoke imports
-from immvoke.Exceptions import HttpError, IedbParseError
+from immvoke.Exceptions import HttpError, IedbParseError, SchemaError
 from immvoke.Http import HttpClient
 from immvoke.Sources.Base import DataUnit, Query
 from immvoke.Sources.Specificity import REGISTRY, getSpecificitySource
@@ -223,7 +223,8 @@ class TestIedbSource(unittest.TestCase):
             metadata, chunks = source.readUnit(path, unit)
             frame = pandas.concat(list(chunks), ignore_index=True)
 
-        self.assertEqual(metadata, {'kept_cells': None, 'kept_epitopes': None,
+        self.assertEqual(metadata, {'species_only': False, 'kept_cells': None,
+                                    'kept_epitopes': None, 'kept_assays': None,
                                     'antigens': {}})
         self.assertEqual(list(frame.columns), list(IEDB_AIRR_COLUMNS))
         self.assertEqual(frame['cdr3_aa'].tolist(), ['ARDYW'])
@@ -252,16 +253,18 @@ class TestIedbAirrExport(unittest.TestCase):
         self.assertTrue(unit.url.endswith('airr_full.zip'))
 
     def _normalize(self, frame, air_species=None, outcome=None,
-                   antigen_species=None, antigen_structure_type=None, handler=None):
+                   antigen_species=None, antigen_structure_type=None, handler=None,
+                   **more):
         """Read and normalize `frame` the way `immvoke specificity iedb
         download bcr` does, from a downloaded TSV, with --air_species,
-        --outcome, --antigen_species and --antigen_structure_type if given;
-        `handler` serves IEDB's API."""
+        --outcome, --antigen_species, --antigen_structure_type and any
+        `more` filters if given; `handler` serves IEDB's API."""
         source = IedbSource(makeClient(handler or (lambda *a: FakeResponse(200))))
         filters = {k: v for k, v in (('air_species', air_species),
                                      ('outcome', outcome),
                                      ('antigen_species', antigen_species),
-                                     ('antigen_structure_type', antigen_structure_type))
+                                     ('antigen_structure_type', antigen_structure_type),
+                                     *more.items())
                    if v is not None}
         unit = DataUnit(unit_id='bcr_full_airr.tsv', collection='bcr', url=BULK_URL,
                         metadata=filters)
@@ -356,6 +359,7 @@ class TestIedbAirrExport(unittest.TestCase):
             self.assertEqual(query.filters, {'air_species': 'Homo sapiens',
                                              'antigen_species': '*',
                                              'antigen_structure_type': '*',
+                                             'assay_type': '*', 'disease': '*',
                                              'outcome': '*'})
         with self.assertRaises(Exception):
             source.validateQuery('bcr', {'air_species': 'human'})
@@ -475,6 +479,112 @@ class TestIedbAirrExport(unittest.TestCase):
         self.assertEqual(query.filters['antigen_structure_type'], 'Linear peptide')
         with self.assertRaises(Exception):
             source.validateQuery('bcr', {'antigen_structure_type': 'conformational'})
+
+    def _receptors(self):
+        """Receptors for --paired_only: heavy+kappa, heavy alone, heavy with
+        a light chain IEDB gave no locus (its V gene names it), alpha+beta,
+        and heavy+light whose light chain has no species."""
+        human = 'NCBITAXON:9606'
+        return iedbAirrRows(
+            {'cell_id': 'pair', 'sequence_id': '1_1', 'locus': 'IGH', 'locus_species': human},
+            {'cell_id': 'pair', 'sequence_id': '1_2', 'locus': 'IGK', 'locus_species': human},
+            {'cell_id': 'heavy', 'sequence_id': '2_1', 'locus': 'IGH', 'locus_species': human},
+            {'cell_id': 'noLocus', 'sequence_id': '3_1', 'locus': 'IGH',
+             'locus_species': human},
+            {'cell_id': 'noLocus', 'sequence_id': '3_2', 'v_call': 'IGLV1-44*01',
+             'locus_species': human},
+            {'cell_id': 'tcr', 'sequence_id': '4_1', 'locus': 'TRB', 'locus_species': human},
+            {'cell_id': 'tcr', 'sequence_id': '4_2', 'locus': 'TRA', 'locus_species': human},
+            {'cell_id': 'noSpecies', 'sequence_id': '5_1', 'locus': 'IGH',
+             'locus_species': human},
+            {'cell_id': 'noSpecies', 'sequence_id': '5_2', 'locus': 'IGK'})
+
+    def test_paired_only_keeps_receptors_with_both_chains(self):
+        """A chain with no locus counts by its gene; with --air_species, a
+        chain with no species does not count, as it is not kept."""
+        kept, _ = self._normalize(self._receptors(), paired_only=True)
+        self.assertEqual(kept['sequence_id'].tolist(),
+                         ['1_1', '1_2', '3_1', '3_2', '4_1', '4_2', '5_1', '5_2'])
+
+        kept, _ = self._normalize(self._receptors(), paired_only=True,
+                                  air_species='Homo sapiens')
+        self.assertEqual(kept['sequence_id'].tolist(),
+                         ['1_1', '1_2', '3_1', '3_2', '4_1', '4_2'])
+
+    def test_paired_only_is_a_switch(self):
+        source = IedbSource(makeClient(lambda *a: FakeResponse(200)))
+        query = source.validateQuery('bcr', {'paired_only': True})
+
+        self.assertIs(query.filters['paired_only'], True)
+        self.assertEqual(query.filters['air_species'], '*')
+        self.assertNotIn('paired_only',
+                         source.validateQuery('bcr', {}).filters)
+
+    #: bcell_search records: a neutralization assay on COVID-19, an ELISA
+    #: on influenza, and a crystal structure with no disease.
+    ASSAYS = [
+        {'bcell_id': 10, 'assay_names': 'neutralization |biological activity',
+         'disease_names': ['COVID-19'], 'disease_iris': ['DOID:0080600'],
+         'disease_iri_search': ['DOID:4', 'DOID:934', 'DOID:0080600']},
+        {'bcell_id': 11, 'assay_names': 'qualitative binding|ELISA',
+         'disease_names': ['influenza'], 'disease_iris': ['DOID:8469'],
+         'disease_iri_search': ['DOID:4', 'DOID:934', 'DOID:8469']},
+        {'bcell_id': 12, 'assay_names': '3D structure|x-ray crystallography|angstroms',
+         'disease_names': None, 'disease_iris': None, 'disease_iri_search': None},
+        {'bcell_id': 13, 'assay_names': 'qualitative binding|ELISA',
+         'disease_names': ['viral infectious disease'], 'disease_iris': ['DOID:934'],
+         'disease_iri_search': ['DOID:4', 'DOID:934']},
+    ]
+
+    def _assayHandler(self):
+        """Serve ASSAYS to bcell_search, no epitopes to epitope_search."""
+        def handler(method, url, headers, index):
+            body = self.ASSAYS if 'bcell_search' in url else []
+            return FakeResponse(200, json.dumps(body).encode('utf-8'))
+        return handler
+
+    def _assayed(self):
+        """A record per assay mix: neutralization+ELISA, ELISA alone, the
+        structure alone."""
+        return iedbAirrRows(
+            {'cell_id': 'a', 'sequence_id': '1_1', 'iedb_assay_ids': '11, 10'},
+            {'cell_id': 'b', 'sequence_id': '2_1', 'iedb_assay_ids': '11'},
+            {'cell_id': 'c', 'sequence_id': '3_1', 'iedb_assay_ids': '12'})
+
+    def test_assay_type_keeps_records_with_an_assay_of_that_type(self):
+        kept, _ = self._normalize(self._assayed(), handler=self._assayHandler(),
+                                  assay_type='Neutralization')
+        self.assertEqual(kept['sequence_id'].tolist(), ['1_1'])
+
+        kept, _ = self._normalize(self._assayed(), handler=self._assayHandler(),
+                                  assay_type='qualitative binding')
+        self.assertEqual(kept['sequence_id'].tolist(), ['1_1', '2_1'])
+
+        with self.assertRaisesRegex(SchemaError, 'closest IEDB types: neutralization'):
+            self._normalize(self._assayed(), handler=self._assayHandler(),
+                            assay_type='neutralisation')
+
+    def test_disease_keeps_that_disease_and_those_under_it(self):
+        kept, _ = self._normalize(self._assayed(), handler=self._assayHandler(),
+                                  disease='covid-19')
+        self.assertEqual(kept['sequence_id'].tolist(), ['1_1'])
+
+        kept, _ = self._normalize(self._assayed(), handler=self._assayHandler(),
+                                  disease='viral infectious disease')
+        self.assertEqual(kept['sequence_id'].tolist(), ['1_1', '2_1'])
+
+        # Both must hold for the same assay: 1_1's neutralization was on
+        # COVID-19, its influenza assay an ELISA.
+        kept, _ = self._normalize(self._assayed(), handler=self._assayHandler(),
+                                  disease='COVID-19', assay_type='neutralization')
+        self.assertEqual(kept['sequence_id'].tolist(), ['1_1'])
+        kept, _ = self._normalize(self._assayed(), handler=self._assayHandler(),
+                                  disease='influenza', assay_type='neutralization')
+        self.assertEqual(kept['sequence_id'].tolist(), [])
+
+        with self.assertRaisesRegex(SchemaError, "no disease named 'measles'"):
+            self._normalize(self._assayed(), handler=self._assayHandler(),
+                            disease='measles')
 
     def test_antigen_species_accepts_any_name(self):
         """The schema lets any name through; IEDB is asked when fetching."""

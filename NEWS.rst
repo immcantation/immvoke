@@ -38,6 +38,10 @@ Specificity:
   structure type: ``Linear peptide``, ``Discontinuous peptide`` (which
   includes ``Discontinuous peptide on multi chain``) or ``Non-peptidic``
   (haptens, glycans, lipids...), IEDB's own Epitope Structure choice.
++ IEDB's bcr and tcr take ``--assay_type`` (e.g. ``neutralization``) and
+  ``--disease`` (e.g. ``COVID-19``; a disease includes those under it),
+  looked up on IEDB's assay API only when given, and ``--paired_only``,
+  keeping receptors with both chains of a pair.
 + IEDB's bulk ZIP is cached in ``~/.cache/immvoke/iedb/`` for a day, shared
   by search and download, so ``bcr`` then ``tcr`` fetch it once.
 + Filter flags generated from a source's schema are spelled with

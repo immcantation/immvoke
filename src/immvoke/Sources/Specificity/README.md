@@ -32,7 +32,19 @@ naming the closest IEDB names. Every epitope structure is kept unless
 peptide` (which includes `Discontinuous peptide on multi chain`) or
 `Non-peptidic` (haptens, glycans, lipids...) -- IEDB's `structure_type`,
 the same choice as its own search's Epitope Structure, looked up in the
-same API call. The rest is
+same API call. `--assay_type` keeps records with an assay of that type
+(`neutralization`, `3D structure`, `qualitative binding`, ... -- the first
+part of IEDB's assay name), and `--disease` those with an assay studying
+that disease or one under it (`"viral infectious disease"` takes in
+COVID-19, influenza and the rest), both any name IEDB uses, ignoring case;
+given both, one assay must satisfy both. They ask IEDB's API about the
+table's assays, adding about 40 seconds, and only when given. IEDB records
+no disease for most assays, so for a pathogen `--antigen_species` finds
+more (SARS-CoV2 neutralizing human antibodies: 63 receptor groups by
+`--antigen_species SARS-CoV2`, 39 by `--disease COVID-19`). `--paired_only`
+keeps only receptors with both chains of a pair -- heavy with kappa or
+lambda, beta with alpha, delta with gamma -- naming a chain IEDB gave no
+locus by its V or J gene. The rest is
 kept as is -- one
 rearrangement record per chain, linked by `cell_id`,
 built from IEDB's calculated (IMGT standardized) gene calls and CDRs, with
@@ -43,6 +55,10 @@ alongside -- and writes it as `iedb_bcr.tsv` with an `iedb_bcr.airr_validation.l
 immvoke specificity iedb download bcr --air_species "Homo sapiens" \
     --antigen_species "Influenza A virus" --antigen_structure_type "Discontinuous peptide" \
     --outcome Positive --outdir databases
+
+# neutralizing, paired human antibodies
+immvoke specificity iedb download bcr --air_species "Homo sapiens" \
+    --assay_type neutralization --paired_only --outdir databases
 ```
 
 `search` takes the same filters and counts what a download would give,
