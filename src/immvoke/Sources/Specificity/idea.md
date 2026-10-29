@@ -28,8 +28,9 @@ With `--paired` on, steps 3-7 are replaced by one fixed comparison: an
 antibody (`cell_id`) matches a reference antibody only if both its heavy and
 its light chain have the same V gene, the same J gene and an exact CDR3 --
 classified `both`, `heavy_only`, `light_only`, `conflicting` or `neither`.
-Without it, every query heavy chain row gets one result row, 0 hits if
-unmatched: its best hits -- the highest identity, all of them on a tie --
+Without it, every query heavy chain row that matched something gets one
+result row -- an unmatched row is left out, counted in the metadata
+instead: its best hits -- the highest identity, all of them on a tie --
 with `n_hits`, `identity`, `hit_ids` and each hit's `antigen`, `epitope`
 and `antigen_source_species` from the reference, `;` between hits.
 `annotation_full_matrix.txt` (`--full-dist-matrix`) lists every hit within

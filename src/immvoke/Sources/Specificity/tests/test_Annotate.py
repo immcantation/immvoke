@@ -167,20 +167,23 @@ def bruteForceSpecificity(queries, reference, sequence_region='CDR3H',
         return_pairs=True)
 
     # Each query's best hits: the fewest mismatches, all of them on a tie.
+    # A query row that matched nothing is left out, as the real one does.
     rows = []
     for row, sequence_id in enumerate(queries['sequence_id']):
         hits = pairs[pairs['query_row'] == row]
+        if not len(hits):
+            continue
         best = hits[hits['mismatches'] == hits['mismatches'].min()]
         rows.append({'sequence_id': sequence_id, 'n_hits': len(best),
-                     'identity': round(best['identity'].iloc[0], 4) if len(best)
-                     else numpy.nan,
+                     'identity': round(best['identity'].iloc[0], 4),
                      'hit_ids': ';'.join(best['reference_id']),
-                     'antigen': ';' * (len(best) - 1) if len(best) else '',
-                     'epitope': ';' * (len(best) - 1) if len(best) else '',
-                     'antigen_source_species': ';' * (len(best) - 1) if len(best)
-                     else ''})
+                     'antigen': ';' * (len(best) - 1),
+                     'epitope': ';' * (len(best) - 1),
+                     'antigen_source_species': ';' * (len(best) - 1)})
 
-    return pandas.DataFrame(rows)
+    return pandas.DataFrame(rows, columns=['sequence_id', 'n_hits', 'identity',
+                                           'hit_ids', 'antigen', 'epitope',
+                                           'antigen_source_species'])
 
 
 def heavy(sequence_id, cdr3_aa, v_call='IGHV1', j_call='IGHJ1', **extra):
@@ -196,21 +199,36 @@ class TestAnnotateSpecificity(unittest.TestCase):
     """
 
     def _hits(self, queries, reference, **kwargs):
+        """Each heavy chain query's hit_ids, in query order, '' where it
+        matched nothing. The real table leaves an unmatched query out
+        entirely; this puts it back so that a test can say which query
+        matched what by position."""
         result = annotateSpecificity(frame(queries), airr(reference), **kwargs)
-        return result['hit_ids'].tolist()
+        found = dict(zip(result['sequence_id'], result['hit_ids']))
 
-    def test_default_is_an_exact_cdr3_match_reporting_every_query_row(self):
-        result = annotateSpecificity(
-            frame([heavy('q1', 'CARDYW'), heavy('q2', 'CARDYY')]),
-            airr([heavy('ref1', 'CARDYW', v_call='IGHV3')]))
+        return [found.get(x['sequence_id'], '')
+                for x in queries if x.get('locus', 'IGH') == 'IGH']
 
-        self.assertEqual(result['hit_ids'].tolist(), ['ref1', ''])
-        self.assertEqual(result['n_hits'].tolist(), [1, 0])
+    def test_default_is_an_exact_cdr3_match_reporting_only_matched_rows(self):
+        """A query row that matched nothing is left out, so a repertoire
+        where almost nothing matches gives a short table, not one row per
+        query; the counts stay in the metadata."""
+        with tempfile.TemporaryDirectory() as tmp:
+            result = annotateSpecificity(
+                frame([heavy('q1', 'CARDYW'), heavy('q2', 'CARDYY')]),
+                airr([heavy('ref1', 'CARDYW', v_call='IGHV3')]), outdir=tmp)
+            metadata = yaml.safe_load(Path(tmp, 'reference_' + ANNOTATION_METADATA)
+                                      .read_text())
+
+        self.assertEqual(result['sequence_id'].tolist(), ['q1'])
+        self.assertEqual(result['hit_ids'].tolist(), ['ref1'])
+        self.assertEqual(result['n_hits'].tolist(), [1])
         self.assertEqual(result['identity'].iloc[0], 1.0)
         self.assertEqual(result.columns.tolist(),
                          ['sequence_id', 'n_hits', 'identity', 'hit_ids', 'antigen',
                           'epitope', 'antigen_source_species'])
-        self.assertEqual(result['sequence_id'].tolist(), ['q1', 'q2'])
+        self.assertEqual(metadata['results']['query_rows_compared'], 2)
+        self.assertEqual(metadata['results']['query_rows_with_hits'], 1)
 
     def test_queries_are_named_by_their_sequence_id(self):
         """By the query's own sequence_id -- not by position, which counts
@@ -226,14 +244,14 @@ class TestAnnotateSpecificity(unittest.TestCase):
             matrix = pandas.read_csv(Path(tmp) / ('reference_' + FULL_MATRIX_FILE),
                                      sep='\t')
         self.assertEqual(result[['sequence_id', 'hit_ids']].values.tolist(),
-                         [['q2', 'ref1'], ['q3', '']])
+                         [['q2', 'ref1']])
         self.assertEqual(matrix[['sequence_id', 'hit_id']].values.tolist(),
                          [['q2', 'ref1']])
 
         anonymous = frame([{'cdr3_aa': 'CARDYW'}, {'cdr3_aa': 'CQQQQQ'}])
         result = annotateSpecificity(anonymous, airr([heavy('ref1', 'CARDYW')]))
         self.assertEqual(result[['query_row', 'hit_ids']].values.tolist(),
-                         [[0, 'ref1'], [1, '']])
+                         [[0, 'ref1']])
 
     def test_only_heavy_chain_rows_are_compared(self):
         light = dict(sequence_id='q2', locus='IGK', cdr3_aa='CQQYNS',
@@ -453,15 +471,17 @@ class TestAnnotateSpecificity(unittest.TestCase):
     def test_a_run_without_hits_fills_text_columns_cleanly(self):
         """No hit at all leaves the text columns all missing, which pandas
         reads as float: filling those with '' must not warn (a future pandas
-        raises instead)."""
+        raises instead). Every row is then dropped, so the table is empty
+        but still has its columns."""
         with warnings.catch_warnings():
             warnings.simplefilter('error')
             result = annotateSpecificity(frame([heavy('q1', 'CQQQQQ')]),
                                          airr([heavy('ref1', 'CARDYW')]))
 
-        self.assertEqual(result[['n_hits', 'hit_ids', 'epitope']].values.tolist(),
-                         [[0, '', '']])
-        self.assertTrue(numpy.isnan(result['identity'].iloc[0]))
+        self.assertEqual(len(result), 0)
+        self.assertEqual(result.columns.tolist(),
+                         ['sequence_id', 'n_hits', 'identity', 'hit_ids', 'antigen',
+                          'epitope', 'antigen_source_species'])
 
     def test_only_the_best_hits_are_reported(self):
         """A query keeps the hits with the highest identity only; the full
@@ -478,8 +498,8 @@ class TestAnnotateSpecificity(unittest.TestCase):
                                      sep='\t')
             metadata = yaml.safe_load(Path(tmp, 'reference_' + ANNOTATION_METADATA)
                                       .read_text())
-        self.assertEqual(result[['hit_ids', 'n_hits']].values.tolist(),
-                         [['ref1', 1], ['', 0], ['ref2', 1], ['', 0]])
+        self.assertEqual(result[['sequence_id', 'hit_ids', 'n_hits']].values.tolist(),
+                         [['q1', 'ref1', 1], ['q3', 'ref2', 1]])
         self.assertEqual(result['identity'].tolist()[0], 1.0)
         self.assertEqual(matrix.columns.tolist(), ['sequence_id', 'hit_id', 'identity'])
         self.assertEqual(matrix.values.tolist(),
@@ -851,5 +871,6 @@ class TestAnnotateCli(unittest.TestCase):
             written = pandas.read_csv(tmp / 'run' / ('r_' + ANNOTATION_FILE), sep='\t',
                                       keep_default_na=False)
             metadata = yaml.safe_load(Path(tmp, 'run', 'r_' + ANNOTATION_METADATA).read_text())
-        self.assertEqual(written['hit_ids'].tolist(), ['ref1', ''])
+        self.assertEqual(written['hit_ids'].tolist(), ['ref1'])
+        self.assertEqual(written['sequence_id'].tolist(), ['q1'])
         self.assertEqual(metadata['command'], ' '.join(['immvoke'] + argv))

@@ -195,7 +195,8 @@ file name alone (`myref.tsv` gives `myref_annotation.tsv`), and a DataFrame
 passed from Python by `reference_`.
 
 `<db>_<table>_annotation.tsv`, without `--paired`, has one row per query
-heavy chain row, including rows with no hit. Of a query's hits it keeps the
+heavy chain row that matched something; a row with no hit is left out, its
+count kept in the metadata. Of a query's hits it keeps the
 **best**: the ones with the highest identity, all of them when several tie.
 
 | Column | Meaning |

@@ -3,8 +3,9 @@ Antigen specificity annotation: query-vs-reference receptor comparison
 
 For each row of a query AIRR table, find every row of a fixed reference AIRR
 table it agrees with, and report its best hits -- one annotation per query
-row (its `sequence_id`, `n_hits`, `identity`, `hit_ids` and each hit's
-`antigen`, `epitope` and `antigen_source_species`), plus, on request, every
+row that matched something (its `sequence_id`, `n_hits`, `identity`,
+`hit_ids` and each hit's `antigen`, `epitope` and
+`antigen_source_species`), plus, on request, every
 hit within the threshold (full_dist_matrix). This is the last pipeline stage: download a
 specificity database's table, which lands as an AIRR rearrangement TSV in
 the database's own folder (`immvoke specificity iedb download bcr`), then
@@ -713,10 +714,12 @@ def _bestHits(pairs, n_queries, reference):
         for HIT_ANNOTATIONS.
 
     Returns:
-      pandas.DataFrame: one row per query row: `query_row`, `n_hits` (how
-      many best hits), `identity` (theirs, to 4 decimals), `hit_ids` and
-      HIT_ANNOTATIONS' columns, one entry per hit, HIT_SEP joined in the
-      same order; 0 hits and blanks for a query row without one.
+      pandas.DataFrame: one row per query row, including those without a
+      hit (annotateSpecificity drops those once it has counted them):
+      `query_row`, `n_hits` (how many best hits), `identity` (theirs, to 4
+      decimals), `hit_ids` and HIT_ANNOTATIONS' columns, one entry per hit,
+      HIT_SEP joined in the same order; 0 hits and blanks for a query row
+      without one.
     """
     names = [name for name, _ in HIT_ANNOTATIONS]
     columns = ['query_row', 'n_hits', 'identity', 'hit_ids'] + names
@@ -934,9 +937,10 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
     Returns:
       pandas.DataFrame: when `paired`, one row per query `cell_id` (see
       runPairedExactAnnotation); otherwise one row per heavy chain query
-      row, every one of them -- 0 hits if unmatched -- with `sequence_id`
-      (the query's own; `query_row`, its position among the heavy chain
-      rows, for a query without that column), then its best hits, the ones
+      row that matched something, a row without a hit left out, with
+      `sequence_id` (the query's own; `query_row`, its position among the
+      heavy chain rows, for a query without that column), then its best
+      hits, the ones
       with the highest identity (all of them on a tie): `n_hits`,
       `identity`, `hit_ids`, and each hit's `antigen`, `epitope` and
       `antigen_source_species` from the reference (HIT_ANNOTATIONS), one
@@ -1040,11 +1044,15 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
     pairs, skipped = _runSingleChain(queries, ref, compare_cols, gene_cols,
                                      exact_cols, threshold, metric, threads)
     result = _bestHits(pairs, len(queries), ref)
-    hit = int(result['n_hits'].gt(0).sum())
+    compared = len(result)
+    # A query row with no hit says nothing the metadata's counts do not, and
+    # on a real repertoire it is almost every row, so the table holds only
+    # the rows that matched something.
+    result = result[result['n_hits'].gt(0)].reset_index(drop=True)
     log.info('%d query rows, %d with at least one hit, %d hits within the '
-             'threshold in all', len(result), hit, len(pairs))
+             'threshold in all', compared, len(result), len(pairs))
     metadata['results'] = {
-        'query_rows_compared': len(result), 'query_rows_with_hits': hit,
+        'query_rows_compared': compared, 'query_rows_with_hits': len(result),
         'query_rows_scored_directly': len(skipped), 'hits': len(pairs)}
     result = _withQueryIds(result, queries)
     matrix = None
