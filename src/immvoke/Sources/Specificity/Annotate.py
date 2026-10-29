@@ -37,6 +37,7 @@ __author__ = 'Pramod Shinde'
 # Imports
 import logging
 import sys
+import time
 from pathlib import Path
 
 import numpy
@@ -51,6 +52,7 @@ from immvoke.Provenance import (
     commandLine,
     timestamp,
 )
+from immvoke.Sources.Specificity import Report
 from immvoke.Version import __version__
 
 log = logging.getLogger(__name__)
@@ -483,8 +485,8 @@ def _restrictToHeavyChain(frame, label):
     """
     if LOCUS_COL in frame.columns:
         filtered = frame[frame[LOCUS_COL] == HEAVY_LOCUS]
-        log.info('%s: %d/%d rows are locus %s', label, len(filtered), len(frame),
-                 HEAVY_LOCUS)
+        log.info('  %s: %s of %s rows are heavy chains (locus %s)', label,
+                 format(len(filtered), ','), format(len(frame), ','), HEAVY_LOCUS)
         if not len(filtered):
             raise AnnotationError(
                 '%s has no heavy chain rows (locus %s) to annotate; its loci '
@@ -562,8 +564,8 @@ def _oneChainPerCell(frame, count_field, label):
         rule = 'the one with the highest %s (the first row on a tie)' % count_field
     else:
         rule = 'the first row (no %s column to rank them by)' % count_field
-    log.info('%s: %s; kept %s', label,
-             ', '.join('%d cells had several %s chains' % (n, name)
+    log.info('  %s: %s; kept %s', label,
+             ', '.join('%s cells had several %s chains' % (format(n, ','), name)
                        for name, n in report.items()), rule)
 
     return frame.drop(index=drop)
@@ -660,7 +662,7 @@ def _scoreSkippedRows(rows, queries, reference, compare_cols, tolerance, options
     rows = numpy.array(rows, dtype=numpy.int64)
     if not len(rows):
         return pandas.DataFrame()
-    log.info("%d query rows are beyond symscan's limits (see Symscan.py); scoring "
+    log.info("  %d query rows are beyond symscan's limits (see Symscan.py); scoring "
              'their pairs directly', len(rows))
 
     # Deferred: Distances builds on this module's helpers.
@@ -880,10 +882,12 @@ def _writeOutputs(outdir, prefix, result, matrix, metadata):
         matrix.round({'identity': 4}).to_csv(out / names[-1], sep='\t', index=False)
     elif stale.is_file():
         stale.unlink()
-        log.info('removed %s, left by an earlier run that asked for it', stale.name)
+        log.info('  removed %s, left by an earlier run that asked for it',
+                 stale.name)
     metadata['finished'] = timestamp()
     (out / names[1]).write_text(yaml.safe_dump(metadata, sort_keys=False))
-    log.info('wrote %s into %s', ', '.join(names), out)
+    log.info('  wrote %s', ', '.join(names))
+    log.info('  into %s', out)
 
 
 def annotateSpecificity(query, reference, sequence_region='CDR3H',
@@ -993,6 +997,10 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
     if Path(sys.argv[0]).stem == 'immvoke':
         metadata['command'] = commandLine()
 
+    started = time.monotonic()
+    Report.annotationStarted(metadata['query'], metadata['reference'],
+                             metadata['options'])
+
     if paired:
         if partition_by is not None or identity_threshold is not None:
             log.warning('paired annotation always compares V-gene, J-gene and '
@@ -1013,12 +1021,12 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
                                                  return_pairs=True)
         classes = {label: int(count) for label, count
                    in result['classification'].value_counts().items()}
-        log.info('%d query antibodies: %s', len(result),
-                 ', '.join('%s=%d' % item for item in classes.items()))
         metadata['results'] = {
             'query_antibodies': len(result), 'classification': classes,
             'skipped_query_rows': result.attrs['skipped_query_rows'],
             'pairs': len(pairs)}
+        Report.annotationCompleted(time.monotonic() - started,
+                                   metadata['results'], paired=True)
         _writeOutputs(outdir, prefix, result, pairs if full_dist_matrix else None,
                       metadata)
 
@@ -1059,11 +1067,11 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
     # on a real repertoire it is almost every row, so the table holds only
     # the rows that matched something.
     result = result[result['n_hits'].gt(0)].reset_index(drop=True)
-    log.info('%d query rows, %d with at least one hit, %d hits within the '
-             'threshold in all', compared, len(result), len(pairs))
     metadata['results'] = {
         'query_rows_compared': compared, 'query_rows_with_hits': len(result),
         'query_rows_scored_directly': len(skipped), 'hits': len(pairs)}
+    Report.annotationCompleted(time.monotonic() - started, metadata['results'],
+                               paired=False)
     result = _withQueryIds(result, queries)
     matrix = None
     if full_dist_matrix:

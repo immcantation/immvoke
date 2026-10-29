@@ -386,8 +386,11 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
     ref_blank = numpy.array([any(v == '' for v in values) for values in ref_values],
                             dtype=bool)
     if query_blank.any() or ref_blank.any():
-        log.info('%d query and %d reference rows have a blank %s; they are not '
-                 'compared', int(query_blank.sum()), int(ref_blank.sum()),
+        # Only the side that has them, so a clean query says nothing.
+        blank = ', '.join('%s %s rows' % (format(int(n.sum()), ','), label)
+                          for label, n in (('query', query_blank),
+                                           ('reference', ref_blank)) if n.any())
+        log.info('  %s have a blank %s; they are not compared', blank,
                  '/'.join(compare_cols))
     all_queries = numpy.flatnonzero(~query_blank).astype(numpy.int64)
     all_refs = numpy.flatnonzero(~ref_blank).astype(numpy.int64)
