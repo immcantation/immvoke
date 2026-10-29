@@ -412,6 +412,28 @@ def _addSourceParser(commands, name, source):
 MIRROR_DELAY = 0.05
 
 
+def _sharedFilterTable(schema, source):
+    """
+    A table whose filters every table of the database shares, so 'all' can
+    offer them too (IEDB's bcr and tcr filter on the same fields), or None
+    when the tables filter differently or not at all.
+
+    Arguments:
+      schema (SourceSchema): the database's snapshot, or None.
+      source (type): the specificity source class.
+
+    Returns:
+      str: the first table, or None.
+    """
+    if schema is None or not all(t in schema.collections for t in source.collections):
+        return None
+    fields = {schema.getCollection(t).fields for t in source.collections}
+    if len(fields) != 1 or not next(iter(fields)):
+        return None
+
+    return source.collections[0]
+
+
 def _addSpecificityParser(commands, name, source):
     """
     Add one specificity database's subcommand tree, with a level per table.
@@ -465,6 +487,8 @@ def _addSpecificityParser(commands, name, source):
                 formatter_class=SpecificityHelpFormatter)
             if filter_table is not None:
                 addFilterGroup(leaf, schema, source, filter_table)
+            elif _sharedFilterTable(schema, source) is not None:
+                addFilterGroup(leaf, schema, source, _sharedFilterTable(schema, source))
             if action == 'search':
                 leaf.add_argument('--top', type=int, default=DEFAULT_TOP,
                                   help='show at most this many values per column')

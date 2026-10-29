@@ -118,6 +118,22 @@ class TestArgParser(unittest.TestCase):
         self.assertEqual(args.action, 'download')
         self.assertFalse(hasattr(args, 'table'))
 
+    def test_specificity_all_tables_take_the_filters_they_share(self):
+        """
+        IEDB's bcr and tcr filter on the same fields, so `iedb <action>
+        all` takes them; CoV-AbDab has no filters to share.
+        """
+        parser = getArgParser()
+        for action in ('search', 'download'):
+            outdir = ['--outdir', '/tmp/does-not-need-to-exist'] if action == 'download' else []
+            args = parser.parse_args(['specificity', 'iedb', action, 'all',
+                                      '--air_species', 'Homo sapiens'] + outdir)
+            self.assertEqual(args.filter_air_species, 'Homo sapiens')
+
+        with self.assertRaises(SystemExit), mock.patch('sys.stderr'):
+            parser.parse_args(['specificity', 'covabdab', 'search', 'all',
+                               '--air_species', 'Homo sapiens'])
+
     def test_collection_is_required(self):
         """
         Omitting the collection is a parse error, not a runtime one.
