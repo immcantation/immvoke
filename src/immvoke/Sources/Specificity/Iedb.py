@@ -350,11 +350,12 @@ def _speciesCodes(name):
 def _speciesCells(path, chunksize, codes):
     """
     The receptors (cell_id) of a receptor AIRR table to keep: those with a
-    chain of the wanted species and no chain of another. A chain with no
-    species recorded does not count against its receptor, so a heavy chain
-    of the wanted species keeps its light chain even when only the heavy one
-    names a species. Decided per receptor, not per chain, so a pair is never
-    split.
+    chain of the wanted species and no chain of another, decided per
+    receptor, so a pair with a chain of another species is dropped whole. A
+    chain with no species recorded does not count against its receptor, but
+    is not kept either: normalizeChunk drops it, so asking for a species
+    gives only chains IEDB says are of it, and a heavy chain whose light
+    chain has no species recorded is kept alone.
 
     Arguments:
       path (Path): the downloaded AIRR TSV.
@@ -364,7 +365,7 @@ def _speciesCells(path, chunksize, codes):
     Returns:
       frozenset: the cell_id values to keep.
     """
-    wanted, other = set(), set()
+    wanted, other, blank = set(), set(), []
     for chunk in pandas.read_csv(path, sep='\t', dtype=str, na_filter=False,
                                  usecols=['cell_id', 'locus_species'],
                                  chunksize=chunksize):
@@ -372,11 +373,14 @@ def _speciesCells(path, chunksize, codes):
         matched = species.isin(codes)
         wanted.update(chunk.loc[matched, 'cell_id'])
         other.update(chunk.loc[~matched & (species != ''), 'cell_id'])
+        blank.extend(chunk.loc[species == '', 'cell_id'])
+    kept = frozenset(wanted - other)
     log.info('  receptor species: %s receptors kept, %s with a chain of another '
-             'species dropped', format(len(wanted - other), ','),
-             format(len(wanted & other), ','))
+             'species dropped, %s chains with no species recorded dropped',
+             format(len(kept), ','), format(len(wanted & other), ','),
+             format(sum(cell in kept for cell in blank), ','))
 
-    return frozenset(wanted - other)
+    return kept
 
 
 
@@ -653,7 +657,8 @@ class IedbSource(SourceBase):
         report['rows_in'] += len(chunk)
         frame = chunk
         if metadata['kept_cells'] is not None:
-            frame = frame[frame['cell_id'].isin(metadata['kept_cells'])]
+            frame = frame[frame['cell_id'].isin(metadata['kept_cells'])
+                          & (frame['locus_species'] != '')]
         if metadata['kept_epitopes'] is not None:
             frame = frame[frame['reactivity_ref'].isin(metadata['kept_epitopes'])]
         outcome = (unit.metadata or {}).get('outcome')

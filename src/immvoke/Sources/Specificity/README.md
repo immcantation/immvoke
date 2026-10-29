@@ -12,8 +12,10 @@ receptors in AIRR format, as `bcr_full_airr.tsv` inside its bulk
 bcr` downloads that table, keeping **every receptor species** unless
 `--air_species` names one. With `--air_species "Homo sapiens"`, a receptor
 is kept when it has a human chain (`locus_species` `NCBITAXON:9606`) and no
-chain of another species -- a chain with no species recorded rides along
-with its partner, so pairs are never split. A species includes its strains:
+chain of another species, and only its human chains are written: a chain
+with no species recorded is left out (`search` would show it as
+`(not recorded)`), so a heavy chain whose light chain IEDB gave no species
+is kept alone. A species includes its strains:
 `"Mus musculus"` also keeps BALB/c, C57BL/6, Xenomouse and the rest, while
 `"Mus musculus BALB/c"` keeps that strain alone. The names are IEDB's;
 `immvoke specificity iedb download bcr --help` lists them all. Likewise

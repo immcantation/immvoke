@@ -311,13 +311,13 @@ class TestIedbAirrExport(unittest.TestCase):
         self.assertEqual((report['rows_in'], report['rows_out']), (9, 9))
 
     def test_air_species_keeps_only_that_species(self):
-        """Per receptor: a chain with no species recorded rides along with
-        one of the asked species; any chain of another species drops the
-        whole receptor."""
+        """Only chains of the asked species: a chain with no species
+        recorded is dropped, leaving its partner alone; any chain of another
+        species drops the whole receptor."""
         kept, report = self._normalize(self._mixedSpecies(), 'Homo sapiens')
 
-        self.assertEqual(kept['sequence_id'].tolist(), ['1_1', '1_2', '2_1', '2_2'])
-        self.assertEqual((report['rows_in'], report['rows_out']), (9, 4))
+        self.assertEqual(kept['sequence_id'].tolist(), ['1_1', '1_2', '2_1'])
+        self.assertEqual((report['rows_in'], report['rows_out']), (9, 3))
 
     def test_air_species_includes_its_strains(self):
         kept, _ = self._normalize(self._mixedSpecies(), 'Mus musculus')

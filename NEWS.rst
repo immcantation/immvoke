@@ -12,7 +12,8 @@ Specificity:
   per chain, linked by ``cell_id``, taking IEDB's calculated (IMGT
   standardized) V/D/J-gene calls over the curated ones, every receptor
   species kept unless ``--air_species`` names one (e.g. ``--air_species
-  "Homo sapiens"``; a species includes its strains), and every assay
+  "Homo sapiens"``; a species includes its strains, and a chain with no
+  species recorded is left out), and every assay
   outcome unless ``--outcome`` names one (``Positive`` or ``Negative``).
   IEDB's B-cell assay tables (``bcell``, ``bcr_to_bcell``) are not
   offered: each receptor record already carries its epitope, assay ids and
