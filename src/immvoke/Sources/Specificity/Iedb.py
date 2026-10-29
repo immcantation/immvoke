@@ -44,6 +44,7 @@ from immvoke.Exceptions import IedbParseError, SchemaError
 from immvoke.Http import hashFile
 from immvoke.Sources.Base import DataUnit, DownloadResult, SourceBase
 from immvoke.Sources.Specificity.Paginate import pageByRange
+from immvoke.Sources.Specificity.Report import humanDuration, humanPath
 from immvoke.Sources.Specificity.RowHash import rowHashes
 
 log = logging.getLogger(__name__)
@@ -237,6 +238,7 @@ def _epitopeRecords(client, path, chunksize):
                                  usecols=['reactivity_ref'], chunksize=chunksize):
         ids.update(chunk['reactivity_ref'])
     numbers = sorted(x.rsplit(':', 1)[-1] for x in ids if x)
+    log.info('  antigens: looking up %s epitopes on IEDB', format(len(numbers), ','))
 
     records = []
     for start in range(0, len(numbers), EPITOPE_BATCH):
@@ -248,7 +250,6 @@ def _epitopeRecords(client, path, chunksize):
         for batch in pageByRange(client, API_BASE + '/epitope_search',
                                  page_size=API_PAGE_SIZE, params=params):
             records.extend(batch)
-    log.info('%s: looked up %d epitopes on IEDB', Path(path).name, len(numbers))
 
     return records
 
@@ -272,8 +273,8 @@ def _antigenEpitopes(records, name):
     own, iri = _resolveAntigen(name, records)
     kept = frozenset('IEDB_EPITOPE:%s' % record['structure_id'] for record in records
                      if iri in (record.get('source_organism_iri_search') or []))
-    log.info("antigen '%s' (%s): %d of %d epitopes kept", own, iri, len(kept),
-             len(records))
+    log.info("  antigen species '%s' (%s): %s of %s epitopes kept", own, iri,
+             format(len(kept), ','), format(len(records), ','))
 
     return kept
 
@@ -297,8 +298,8 @@ def _structureEpitopes(records, name):
     kept = frozenset(
         'IEDB_EPITOPE:%s' % record['structure_id'] for record in records
         if (record.get('structure_type') or '').lower() in (wanted, wanted + ' on multi chain'))
-    log.info("antigen structure type '%s': %d of %d epitopes kept", name, len(kept),
-             len(records))
+    log.info("  antigen structure type '%s': %s of %s epitopes kept", name,
+             format(len(kept), ','), format(len(records), ','))
 
     return kept
 
@@ -371,9 +372,9 @@ def _speciesCells(path, chunksize, codes):
         matched = species.isin(codes)
         wanted.update(chunk.loc[matched, 'cell_id'])
         other.update(chunk.loc[~matched & (species != ''), 'cell_id'])
-    log.info('%s: %d receptors of the asked species kept, %d with a chain of '
-             'another species dropped', Path(path).name, len(wanted - other),
-             len(wanted & other))
+    log.info('  receptor species: %s receptors kept, %s with a chain of another '
+             'species dropped', format(len(wanted - other), ','),
+             format(len(wanted & other), ','))
 
     return frozenset(wanted - other)
 
@@ -559,10 +560,19 @@ class IedbSource(SourceBase):
           DownloadResult: the outcome, describing the extracted table file.
         """
         zip_dest = cacheDir() / BULK_ZIP
-        if zip_dest.exists() and time.time() - zip_dest.stat().st_mtime > CACHE_MAX_AGE:
-            log.info('%s is over a day old; fetching the current export', zip_dest)
+        age = time.time() - zip_dest.stat().st_mtime if zip_dest.exists() else None
+        if age is not None and age > CACHE_MAX_AGE:
+            log.info("  IEDB export: the cached copy is over a day old; "
+                     "downloading IEDB's current one")
             zip_dest.unlink()
-        self.client.fetch(unit.url, zip_dest, resume=resume, progress=progress)
+            age = None
+        elif age is None:
+            log.info('  IEDB export: downloading %s', BULK_ZIP)
+        if age is None:
+            self.client.fetch(unit.url, zip_dest, resume=resume, progress=progress)
+        else:
+            log.info('  IEDB export: using the copy downloaded %s ago (%s)',
+                     humanDuration(age), humanPath(zip_dest))
 
         dest = self.resolveOutputPath(unit, outdir)
         dest.parent.mkdir(parents=True, exist_ok=True)

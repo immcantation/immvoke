@@ -12,6 +12,7 @@ __author__ = 'Susanna Marquez'
 import logging
 import shutil
 import sys
+import time
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
 
@@ -24,7 +25,7 @@ from immvoke.Http import HttpClient
 from immvoke.Schema import loadSchema, saveSchema
 from immvoke.Sources import ALIASES, REGISTRY, canonicalName, getSource
 from immvoke.Sources.Specificity import REGISTRY as SPECIFICITY_REGISTRY
-from immvoke.Sources.Specificity import getSpecificitySource
+from immvoke.Sources.Specificity import Report, getSpecificitySource
 from immvoke.Sources.Specificity.AnnotateCli import addAnnotateParser, handleAnnotate
 from immvoke.Sources.Specificity.Provenance import writeSpecificityMetadata
 from immvoke.Sources.Specificity.Search import (
@@ -1033,8 +1034,12 @@ def handleSpecificityDownload(args):
             continue
 
         for unit in units:
+            start = time.monotonic()
+            Report.started(source, table, filters)
             result = source.fetchUnit(unit, raw_dir, resume=not args.no_resume)
             _, chunks, report = source.convertUnit(result.path, unit)
+            tally = Report.Tally(source, table)
+            chunks = tally.wrap(chunks)
 
             # Named after the database as well as the table, so the file
             # says where it came from once copied out of <db>/.
@@ -1043,16 +1048,15 @@ def handleSpecificityDownload(args):
                 validation = Convert.writeAirr(chunks, dest,
                                                strict=args.strict_airr)
                 Convert.writeValidationReport(validation, dest)
-                log.info('%s: %d rows, %d invalid, %d rows in', dest.name,
-                         validation['rows_checked'], validation['rows_invalid'],
-                         report['rows_in'])
+                rows = validation['rows_checked']
                 output_format = 'airr'
             else:
+                validation = None
                 rows = _writeSpecificityTsv(chunks, dest)
-                log.info('%s: %d rows in, %d rows written', dest.name,
-                         report['rows_in'], rows)
                 output_format = 'tsv'
             formats_written.add(output_format)
+            Report.completed(dest, time.monotonic() - start, report['rows_in'], rows,
+                             tally, validation)
 
             records.append(Provenance.buildUnitRecord(
                 unit, result, outdir, {output_format: dest}))
@@ -1063,16 +1067,17 @@ def handleSpecificityDownload(args):
 
     if not source.keep_raw:
         shutil.rmtree(raw_dir, ignore_errors=True)
-        log.info('removed %s', raw_dir)
+        log.debug('removed %s', raw_dir)
 
     # A specificity download represents the database's current state, not one
     # more addition to a growing set the way OAS downloads are, so this always
     # replaces the metadata file rather than accumulating old runs into it --
     # see Specificity.Provenance for why that is a separate writer.
-    writeSpecificityMetadata(
+    record = writeSpecificityMetadata(
         outdir, args.db, args.table, filters, getattr(args, 'limit', None), records,
         schema=source.schema, license=source.license, citation=source.citation,
         formats=formats_written or ('tsv',))
+    Report.finished(record)
 
     return 0
 
