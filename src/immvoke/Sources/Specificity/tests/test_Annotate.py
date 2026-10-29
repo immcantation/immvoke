@@ -532,6 +532,41 @@ class TestAnnotateSpecificity(unittest.TestCase):
         self.assertEqual(row['epitope'], 'G58, L59 | NWFDIT;K180')
         self.assertEqual(row['antigen_source_species'], 'SARS-CoV2;Influenza A virus')
 
+    def test_a_rerun_without_the_matrix_removes_the_one_left_behind(self):
+        """A run writes the whole bundle: a matrix from an earlier run would
+        otherwise sit beside an overwritten table describing a comparison
+        that no longer happened."""
+        queries, reference = [heavy('q1', 'CARDYW')], [heavy('ref1', 'CARDYY')]
+        with tempfile.TemporaryDirectory() as tmp:
+            matrix = Path(tmp) / ('reference_' + FULL_MATRIX_FILE)
+            annotateSpecificity(frame(queries), airr(reference), outdir=tmp,
+                                identity_threshold=0.8, full_dist_matrix=True)
+            self.assertTrue(matrix.is_file())
+
+            # The same folder, this time an exact match and no matrix asked for.
+            annotateSpecificity(frame(queries), airr(reference), outdir=tmp)
+
+            self.assertFalse(matrix.is_file())
+            self.assertEqual(sorted(x.name for x in Path(tmp).iterdir()),
+                             ['reference_' + ANNOTATION_FILE,
+                              'reference_' + ANNOTATION_METADATA])
+
+    def test_the_full_matrix_keeps_every_hit_not_only_the_closest(self):
+        """The table reduces a query to its best hits; the matrix does not
+        reduce at all, so a weaker hit within the threshold stays."""
+        queries = [heavy('q1', 'CARDYWSSTA')]
+        reference = [heavy('exact', 'CARDYWSSTA'), heavy('one_off', 'CARDYWSSTG'),
+                     heavy('three_off', 'CARDYWSGGG'), heavy('far', 'CGGGGGGGGG')]
+        with tempfile.TemporaryDirectory() as tmp:
+            result = annotateSpecificity(frame(queries), airr(reference), outdir=tmp,
+                                         identity_threshold=0.7, full_dist_matrix=True)
+            matrix = pandas.read_csv(Path(tmp) / ('reference_' + FULL_MATRIX_FILE),
+                                     sep='\t')
+
+        self.assertEqual(result['hit_ids'].tolist(), ['exact'])
+        self.assertEqual(matrix[['hit_id', 'identity']].values.tolist(),
+                         [['exact', 1.0], ['one_off', 0.9], ['three_off', 0.7]])
+
     def test_no_pairs_file_and_no_matrix_unless_asked(self):
         with tempfile.TemporaryDirectory() as tmp:
             annotateSpecificity(frame([heavy('q1', 'CARDYW')]),

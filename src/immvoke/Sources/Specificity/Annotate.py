@@ -849,6 +849,12 @@ def _writeOutputs(outdir, prefix, result, matrix, metadata):
     ANNOTATION_METADATA and, when there is a matrix, FULL_MATRIX_FILE, each
     named `<prefix>_<name>`.
 
+    A run writes the whole bundle, so a matrix an earlier run left in the
+    same folder is removed when this one was not asked for a matrix.
+    Otherwise it would stay beside a table and a metadata record that have
+    been overwritten, describing a comparison that no longer happened --
+    a stale 0.7 matrix next to an exact-match table, say.
+
     Arguments:
       outdir (str): the folder to write into, or None to skip writing.
       prefix (str): the reference's name, from _outputPrefix.
@@ -867,10 +873,14 @@ def _writeOutputs(outdir, prefix, result, matrix, metadata):
     out.mkdir(parents=True, exist_ok=True)
     names = ['%s_%s' % (prefix, name) for name in (ANNOTATION_FILE, ANNOTATION_METADATA)]
     result.to_csv(out / names[0], sep='\t', index=False)
+    stale = out / ('%s_%s' % (prefix, FULL_MATRIX_FILE))
     if matrix is not None:
-        names.append('%s_%s' % (prefix, FULL_MATRIX_FILE))
+        names.append(stale.name)
         # Identity to 4 decimals: 0.4231, not 0.42307692307692313.
         matrix.round({'identity': 4}).to_csv(out / names[-1], sep='\t', index=False)
+    elif stale.is_file():
+        stale.unlink()
+        log.info('removed %s, left by an earlier run that asked for it', stale.name)
     metadata['finished'] = timestamp()
     (out / names[1]).write_text(yaml.safe_dump(metadata, sort_keys=False))
     log.info('wrote %s into %s', ', '.join(names), out)

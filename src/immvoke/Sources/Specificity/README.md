@@ -225,6 +225,15 @@ every hit within `--identity-threshold`, not only the best ones: one row
 per (query, hit), by query and closest first -- `sequence_id`, `hit_id`
 and `identity`. With `--paired`, each antibody's hits: `cell_id`, `hit_id`
 (a reference `cell_id`) and `matched_chains` (`both`, `heavy` or `light`).
+Nothing is reduced here: where the annotation table keeps a query's best
+hits only, the matrix keeps every hit the threshold let through, weaker
+ones included.
+
+A run writes the whole bundle, so running again into the same `--outdir`
+without `--full-dist-matrix` removes the matrix the earlier run left,
+rather than leaving it beside a table and a metadata record that have been
+overwritten -- a 0.7 matrix next to an exact-match table describes a
+comparison that no longer happened.
 
 Reference command: `immvoke specificity iedb download bcr --help`,
 `immvoke annotate --help`.
