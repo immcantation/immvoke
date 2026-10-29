@@ -52,6 +52,33 @@ ALL_SPECIES = 'all'
 #: exists so one field having many values can't blow up every --help screen.
 VALUE_LIST_CAP = 20
 
+#: Every source `immvoke schema` works on: both registries and the aliases.
+#: Specificity databases keep a snapshot like any other source, so `schema
+#: show` lists their filter values -- which is what a rejected filter value
+#: tells the user to run (see Schema.validateFilters).
+SCHEMA_SOURCES = sorted(set(REGISTRY) | set(SPECIFICITY_REGISTRY) | set(ALIASES))
+
+
+def getAnySource(name, client):
+    """
+    Instantiate a source from whichever registry holds it.
+
+    `immvoke schema` is the one command that spans both: every source keeps
+    a snapshot, whether it is mounted under `immvoke <source>` or
+    `immvoke specificity <db>`.
+
+    Arguments:
+      name (str): the source name or alias.
+      client (HttpClient): the shared HTTP client.
+
+    Returns:
+      SourceBase: the source.
+    """
+    if canonicalName(name) in REGISTRY:
+        return getSource(name, client)
+
+    return getSpecificitySource(name, client)
+
 
 def loadSchemaQuietly(name):
     """
@@ -262,8 +289,9 @@ def _addSchemaParser(commands):
                     'collection\'s fields and how many values each accepts, '
                     'or every value a single field accepts.',
         formatter_class=CommonHelpFormatter)
-    show.add_argument('--source', required=True, choices=sorted(REGISTRY) + sorted(ALIASES),
-                      help='which source (or alias) to read the snapshot of')
+    show.add_argument('--source', required=True, choices=SCHEMA_SOURCES,
+                      help='which source (or alias) to read the snapshot of, '
+                           'a repertoire source or a specificity database')
     show.add_argument('--collection', default=None,
                       help='list this collection\'s fields; without it, print '
                            'one summary line per collection')
@@ -279,7 +307,7 @@ def _addSchemaParser(commands):
                     'fetched detail-page enrichment is carried forward '
                     'unless --refresh-details asks to redo it.',
         formatter_class=CommonHelpFormatter)
-    refresh.add_argument('--source', required=True, choices=sorted(REGISTRY) + sorted(ALIASES),
+    refresh.add_argument('--source', required=True, choices=SCHEMA_SOURCES,
                          help='which source to contact and re-harvest')
     refresh.add_argument('--out', default=None, type=Path,
                          help='directory to write into; without it the packaged '
@@ -600,15 +628,28 @@ def handleSchemaShow(args):
 
     collection = schema.getCollection(args.collection)
     if args.field is None:
+        width = max(len(x.name) for x in collection.fields) if collection.fields else 0
         for item in collection.fields:
-            kind = 'presence only' if item.pseudo_values else '%d values' % len(item.values)
-            print('%-14s %s' % (item.name, kind))
+            if item.pseudo_values:
+                kind = 'presence only'
+            elif item.open_values:
+                # The source checks the value itself, so what the snapshot
+                # holds are examples; calling them the vocabulary would read
+                # as though nothing else were accepted.
+                kind = 'any value (%d examples)' % len(item.values)
+            else:
+                kind = '%d values' % len(item.values)
+            print('%s %s' % (item.name.ljust(width), kind))
         return 0
 
     item = collection.getField(args.field)
     if item is None:
         raise ImmvokeError("no field '%s' in %s %s"
                              % (args.field, args.source, args.collection))
+    if item.open_values:
+        # On stderr, so that the values themselves still pipe cleanly.
+        log.info("%s accepts any value %s checks; these are examples",
+                 args.field, args.source)
     for value in item.values:
         print(value)
 
@@ -619,7 +660,7 @@ def handleSchemaRefresh(args):
     """Re-harvest a snapshot and its catalogs."""
     args.source = canonicalName(args.source)
     client = makeClient(args)
-    source = getSource(args.source, client)
+    source = getAnySource(args.source, client)
 
     log.info('harvesting %s search schema', args.source)
     schema = source.harvestSchema()
@@ -633,8 +674,14 @@ def handleSchemaRefresh(args):
     written, changed = saveSchema(schema, out)
     log.info('%s %s', 'wrote' if changed else 'unchanged, left alone:', written)
 
-    wanted = args.collection or list(source.collections)
-    for collection in wanted:
+    # Only a source whose units come from a catalog of its own has one to
+    # refresh. For a germline set or a specificity database the snapshot is
+    # the whole of it, so the harvest ends here rather than reaching for a
+    # harvestCatalog that source never defined.
+    if not hasattr(source, 'harvestCatalog'):
+        return 0
+
+    for collection in args.collection or list(source.collections):
         log.info('harvesting %s %s catalog', args.source, collection)
         rows = source.harvestCatalog(collection, schema=schema)
 

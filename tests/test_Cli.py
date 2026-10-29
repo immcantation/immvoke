@@ -134,6 +134,19 @@ class TestArgParser(unittest.TestCase):
             parser.parse_args(['specificity', 'covabdab', 'search', 'all',
                                '--air_species', 'Homo sapiens'])
 
+    def test_schema_commands_accept_specificity_databases(self):
+        """
+        A rejected filter value tells the user to run `immvoke schema show`
+        for that source (see Schema.validateFilters), so the schema commands
+        have to accept a specificity database, not only a repertoire source.
+        """
+        parser = getArgParser()
+        for action in ('show', 'refresh'):
+            for source in ('iedb', 'covabdab', 'asd', 'oas'):
+                with self.subTest(action=action, source=source):
+                    args = parser.parse_args(['schema', action, '--source', source])
+                    self.assertEqual(args.source, source)
+
     def test_collection_is_required(self):
         """
         Omitting the collection is a parse error, not a runtime one.

@@ -217,6 +217,28 @@ class TestPackagedSnapshot(unittest.TestCase):
         self.assertIn('Primer', unpaired)
         self.assertTrue({'BSource', 'BType', 'Subject'} <= paired)
 
+    def test_every_packaged_snapshot_round_trips(self):
+        """
+        A snapshot must serialize back to what is checked in, so that
+        `immvoke schema refresh` on an unchanged source leaves the file
+        alone (see saveSchema) rather than reformatting a tracked file and
+        opening a pull request with no real change in it.
+        """
+        from importlib import resources
+
+        from immvoke.Schema import sameContent, serializeSchema
+
+        root = resources.files('immvoke').joinpath('data/schemas')
+        packaged = sorted(x.name for x in root.iterdir()
+                          if x.joinpath('schema.yaml').is_file())
+        self.assertTrue(packaged, 'no packaged snapshots found')
+
+        for name in packaged:
+            with self.subTest(source=name):
+                stored = root.joinpath(name, 'schema.yaml').read_text()
+                self.assertTrue(sameContent(stored, serializeSchema(loadSchema(name))),
+                                '%s would be rewritten by schema refresh' % name)
+
 
 if __name__ == '__main__':
     unittest.main()

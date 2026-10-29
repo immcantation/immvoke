@@ -99,6 +99,7 @@ collections:
       values:
       - Positive
       - Negative
+    reported_totals: {}
   tcr:
     fields:
     - name: air_species
@@ -189,3 +190,4 @@ collections:
       values:
       - Positive
       - Negative
+    reported_totals: {}
