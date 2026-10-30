@@ -137,7 +137,7 @@ and, given `outdir`, writes the same files the command does.
 | `--count-field` | `count_field` | an AIRR count column; `duplicate_count` (default) | `--paired`: which of a query cell's several heavy (or light) chains to keep -- the highest count |
 | `--threads` | `threads` | `1` (default); `-1` for every core | symscan's threads |
 | `--outdir` | `outdir` | folder, created if needed | where to write this run's files (see Output) |
-| `--full-dist-matrix` | `full_dist_matrix` | flag | also write every hit within the threshold, not only the best ones (see Output) |
+| `--full-dist-matrix` | `full_dist_matrix` | flag | also write how close every pair the filters admit is, threshold or not (see Output) |
 
 `--partition-by` is off by default, but an unpartitioned CDR3 comparison at
 a loose threshold is prone to coincidental hits, especially on short CDR3s,
@@ -184,7 +184,7 @@ annotation/exact/
 ├── iedb_bcr_annotation.tsv               # one row per query: its best hits
 ├── iedb_bcr_annotation_metadata.yml      # the options, query, reference and its
 │                                         # database, counts, version, time and command
-└── iedb_bcr_annotation_full_matrix.txt   # --full-dist-matrix: every hit, one per row
+└── iedb_bcr_annotation_full_matrix.txt   # --full-dist-matrix: every compared pair
 ```
 
 The database is read off the `download_metadata.yml` that `immvoke
@@ -221,9 +221,19 @@ With `--paired`, one row per query antibody (`cell_id`): `classification`
 `heavy_hit_ids`, `light_hit_ids` and `both_hit_ids`.
 
 `<db>_<table>_annotation_full_matrix.txt`, with `--full-dist-matrix`, lists
-every hit within `--identity-threshold`, not only the best ones: one row
-per (query, hit), by query and closest first -- `sequence_id`, `hit_id`
-and `identity`. With `--paired`, each antibody's hits: `cell_id`, `hit_id`
+**every pair the filters admit** and how close it is: one row per (query,
+hit), by query and closest first -- `sequence_id`, `hit_id` and
+`identity`. The annotation table answers what a query matched, so
+`--identity-threshold` decides it; the matrix answers how close a query is
+to everything it was compared with, so the threshold does not apply --
+a pair far below it still gets a row. `--partition-by` does apply: a
+reference of another V or J gene was never compared, so it has no distance
+to report, and under `hamming` neither has one of a different CDR3 length
+(a Hamming distance needs equal lengths). Without `--partition-by` this is
+every same-length pair of both tables -- 14.6 million rows for a
+repertoire against IEDB's BCR table, against 28,671 under `VJ` -- so it is
+written a block at a time rather than built in memory, and a run without
+`--partition-by` warns. With `--paired`, each antibody's hits: `cell_id`, `hit_id`
 (a reference `cell_id`) and `matched_chains` (`both`, `heavy` or `light`).
 Nothing is reduced here: where the annotation table keeps a query's best
 hits only, the matrix keeps every hit the threshold let through, weaker

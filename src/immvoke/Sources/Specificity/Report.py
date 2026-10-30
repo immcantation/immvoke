@@ -220,6 +220,9 @@ def annotationCompleted(seconds, results, paired):
                            format(results['query_rows_compared'], ','))),
             ('hits within the threshold', format(results['hits'], ',')),
         ]
+    if 'full_matrix_rows' in results:
+        figures.append(('pairs in the full matrix',
+                        format(results['full_matrix_rows'], ',')))
     pad = max(len(label) for label, _ in figures) + 2
     for label, value in figures:
         log.info('  %s%s', label.ljust(pad), value)

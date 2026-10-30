@@ -13,8 +13,8 @@ Reads two AIRR rearrangement TSVs already on disk -- typically a user's own
 receptor table as `--query` and a specificity database's downloaded table
 (e.g. `immvoke specificity iedb download bcr`'s output) as `--reference` --
 and writes the annotation (each query row's best hits) and a record of the
-run into `--outdir`, plus every hit within the threshold with
-`--full-dist-matrix`. It does not itself download or convert anything; that
+run into `--outdir`, plus every pair the filters admit and how close it
+is with `--full-dist-matrix`. It does not itself download or convert anything; that
 is handled by `immvoke specificity iedb download bcr`.
 """
 
@@ -127,11 +127,12 @@ def addAnnotateParser(commands):
                              % (ANNOTATION_FILE, ANNOTATION_FILE, ANNOTATION_METADATA))
     parser.add_argument('--full-dist-matrix', dest='full_dist_matrix',
                         action='store_true',
-                        help='also write <db>_<table>_%s: every hit within '
-                             '--identity-threshold, not only the best ones, '
-                             'one row per (query sequence_id, hit_id, '
-                             'identity); under --paired, each antibody\'s '
-                             'hits and the chains they matched on'
+                        help='also write <db>_<table>_%s: every pair the '
+                             'filters admit and how close it is, one row per '
+                             '(query sequence_id, hit_id, identity). '
+                             '--identity-threshold does not apply to it, '
+                             '--partition-by does; under --paired, each '
+                             "antibody's hits and the chains they matched on"
                              % FULL_MATRIX_FILE)
 
 

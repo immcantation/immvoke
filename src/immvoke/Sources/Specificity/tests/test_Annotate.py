@@ -246,7 +246,7 @@ class TestAnnotateSpecificity(unittest.TestCase):
         self.assertEqual(result[['sequence_id', 'hit_ids']].values.tolist(),
                          [['q2', 'ref1']])
         self.assertEqual(matrix[['sequence_id', 'hit_id']].values.tolist(),
-                         [['q2', 'ref1']])
+                         [['q2', 'ref1'], ['q3', 'ref1']])
 
         anonymous = frame([{'cdr3_aa': 'CARDYW'}, {'cdr3_aa': 'CQQQQQ'}])
         result = annotateSpecificity(anonymous, airr([heavy('ref1', 'CARDYW')]))
@@ -502,8 +502,11 @@ class TestAnnotateSpecificity(unittest.TestCase):
                          [['q1', 'ref1', 1], ['q3', 'ref2', 1]])
         self.assertEqual(result['identity'].tolist()[0], 1.0)
         self.assertEqual(matrix.columns.tolist(), ['sequence_id', 'hit_id', 'identity'])
+        # The matrix is not thresholded: q2 matches nothing, yet its
+        # distance to each reference is still reported.
         self.assertEqual(matrix.values.tolist(),
                          [['q1', 'ref1', 1.0], ['q1', 'ref2', 0.8333],
+                          ['q2', 'ref1', 0.1667], ['q2', 'ref2', 0.1667],
                           ['q3', 'ref2', 1.0], ['q3', 'ref1', 0.8333]])
         self.assertEqual(metadata['results']['hits'], 4)
 
@@ -551,9 +554,11 @@ class TestAnnotateSpecificity(unittest.TestCase):
                              ['reference_' + ANNOTATION_FILE,
                               'reference_' + ANNOTATION_METADATA])
 
-    def test_the_full_matrix_keeps_every_hit_not_only_the_closest(self):
-        """The table reduces a query to its best hits; the matrix does not
-        reduce at all, so a weaker hit within the threshold stays."""
+    def test_the_full_matrix_ignores_the_identity_threshold(self):
+        """The table answers what a query matched, so --identity-threshold
+        decides it; the matrix answers how close the query is to everything
+        it was compared with, so the threshold does not apply -- 'far' is
+        well below it and still reported."""
         queries = [heavy('q1', 'CARDYWSSTA')]
         reference = [heavy('exact', 'CARDYWSSTA'), heavy('one_off', 'CARDYWSSTG'),
                      heavy('three_off', 'CARDYWSGGG'), heavy('far', 'CGGGGGGGGG')]
@@ -562,10 +567,35 @@ class TestAnnotateSpecificity(unittest.TestCase):
                                          identity_threshold=0.7, full_dist_matrix=True)
             matrix = pandas.read_csv(Path(tmp) / ('reference_' + FULL_MATRIX_FILE),
                                      sep='\t')
+            metadata = yaml.safe_load(Path(tmp, 'reference_' + ANNOTATION_METADATA)
+                                      .read_text())
 
         self.assertEqual(result['hit_ids'].tolist(), ['exact'])
         self.assertEqual(matrix[['hit_id', 'identity']].values.tolist(),
-                         [['exact', 1.0], ['one_off', 0.9], ['three_off', 0.7]])
+                         [['exact', 1.0], ['one_off', 0.9], ['three_off', 0.7],
+                          ['far', 0.1]])
+        self.assertEqual(metadata['results']['full_matrix_rows'], 4)
+
+    def test_the_full_matrix_holds_only_pairs_the_filters_admit(self):
+        """--partition-by still applies: a reference of another V or J gene
+        was never compared, so it has no distance to report. Under
+        'hamming' a different CDR3 length has no distance either."""
+        queries = [heavy('q1', 'CARDYW')]
+        reference = [heavy('sameVJ', 'CAKKKK'),
+                     heavy('otherV', 'CAKKKK', v_call='IGHV9-9'),
+                     heavy('otherJ', 'CAKKKK', j_call='IGHJ9'),
+                     heavy('longer', 'CARDYWAAA')]
+
+        def matrix(**kwargs):
+            with tempfile.TemporaryDirectory() as tmp:
+                annotateSpecificity(frame(queries), airr(reference), outdir=tmp,
+                                    full_dist_matrix=True, **kwargs)
+                return pandas.read_csv(Path(tmp) / ('reference_' + FULL_MATRIX_FILE),
+                                       sep='\t')['hit_id'].tolist()
+
+        self.assertEqual(matrix(partition_by='VJ'), ['sameVJ'])
+        self.assertEqual(sorted(matrix(partition_by='V')), ['otherJ', 'sameVJ'])
+        self.assertEqual(sorted(matrix()), ['otherJ', 'otherV', 'sameVJ'])
 
     def test_no_pairs_file_and_no_matrix_unless_asked(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -596,7 +626,7 @@ class TestAnnotateSpecificity(unittest.TestCase):
                                                   ['ab1', 'refB', 'heavy']])
         self.assertEqual(metadata['results'], {
             'query_antibodies': 2, 'classification': {'both': 1, 'neither': 1},
-            'pairs': 2, 'skipped_query_rows': 0})
+            'pairs': 2, 'skipped_query_rows': 0, 'full_matrix_rows': 2})
 
     def test_genes_match_by_name_any_allele(self):
         queries = [heavy('q1', 'CARDYW', v_call='IGHV1-2*02', j_call='IGHJ4*02')]

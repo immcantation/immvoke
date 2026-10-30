@@ -22,7 +22,7 @@ always run; the others are set with the option shown (the
 | 6 | How close is a hit | `--identity-threshold` | a fraction in (0, 1] | exact |
 | 7 | Distance | `--distance-metric` | `hamming`, `levenshtein` | `hamming` |
 | 8 | Search | *automatic* | symscan; rows too large for it are scored directly instead, and counted in `annotation_metadata.yml` | -- |
-| 9 | Output | `--outdir` (`outdir` in Python), `--full-dist-matrix` | `annotation.tsv` (each query's best hits, also returned as a DataFrame) and `annotation_metadata.yml`, plus `annotation_full_matrix.txt` (every hit within the threshold) with `--full-dist-matrix`, each prefixed with the reference's database and table (`iedb_bcr_annotation.tsv`) | -- |
+| 9 | Output | `--outdir` (`outdir` in Python), `--full-dist-matrix` | `annotation.tsv` (each query's best hits, also returned as a DataFrame) and `annotation_metadata.yml`, plus `annotation_full_matrix.txt` (every pair the filters admit, whatever its distance) with `--full-dist-matrix`, each prefixed with the reference's database and table (`iedb_bcr_annotation.tsv`) | -- |
 
 With `--paired` on, steps 3-7 are replaced by one fixed comparison: an
 antibody (`cell_id`) matches a reference antibody only if both its heavy and
@@ -33,8 +33,9 @@ result row -- an unmatched row is left out, counted in the metadata
 instead: its best hits -- the highest identity, all of them on a tie --
 with `n_hits`, `identity`, `hit_ids` and each hit's `antigen`, `epitope`
 and `antigen_source_species` from the reference, `;` between hits.
-`annotation_full_matrix.txt` (`--full-dist-matrix`) lists every hit within
-the threshold, one (query, hit, identity) per row.
+`annotation_full_matrix.txt` (`--full-dist-matrix`) lists every pair the
+filters admit and how close it is, one (query, hit, identity) per row --
+`--identity-threshold` does not apply to it, `--partition-by` does.
 
 The output files are named after the reference, `<db>_<table>_` -- the
 database read off the `download_metadata.yml` `immvoke specificity` writes

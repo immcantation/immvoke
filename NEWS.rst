@@ -68,8 +68,12 @@ Specificity:
   hits, the highest identity (all of them on a tie): ``sequence_id``,
   ``n_hits``, ``identity``, ``hit_ids`` and each hit's ``antigen``,
   ``epitope`` and ``antigen_source_species``, ``;`` between hits.
-  ``--full-dist-matrix`` also writes ``annotation_full_matrix.txt``, every
-  hit within the threshold (``sequence_id``, ``hit_id``, ``identity``).
+  ``--full-dist-matrix`` also writes ``annotation_full_matrix.txt``:
+  every pair the filters admit and how close it is (``sequence_id``,
+  ``hit_id``, ``identity``). ``--identity-threshold`` does not apply to it
+  -- it answers how close a query is to everything it was compared with,
+  not what it matched -- but ``--partition-by`` does, and under ``hamming``
+  only equal-length sequences have a distance at all.
 
 .. _IEDB: https://www.iedb.org/
 .. _CoV-AbDab: https://opig.stats.ox.ac.uk/webapps/covabdab/

@@ -5,8 +5,8 @@ For each row of a query AIRR table, find every row of a fixed reference AIRR
 table it agrees with, and report its best hits -- one annotation per query
 row that matched something (its `sequence_id`, `n_hits`, `identity`,
 `hit_ids` and each hit's `antigen`, `epitope` and
-`antigen_source_species`), plus, on request, every
-hit within the threshold (full_dist_matrix). This is the last pipeline stage: download a
+`antigen_source_species`), plus, on request, how close every pair the
+filters admit is (full_dist_matrix). This is the last pipeline stage: download a
 specificity database's table, which lands as an AIRR rearrangement TSV in
 the database's own folder (`immvoke specificity iedb download bcr`), then
 annotate a user's own AIRR table against it as the reference, into an output
@@ -77,7 +77,7 @@ LIGHT_LOCI = ('IGK', 'IGL')
 DEFAULT_COUNT_FIELD = 'duplicate_count'
 
 #: What annotateSpecificity writes into its outdir: the result, the record
-#: of the run and, with full_dist_matrix, every hit within the threshold --
+#: of the run and, with full_dist_matrix, how close every compared pair is --
 #: each name prefixed with the reference's database and table
 #: (_outputPrefix), e.g. iedb_bcr_annotation.tsv.
 ANNOTATION_FILE = 'annotation.tsv'
@@ -614,19 +614,11 @@ def _runSingleChain(queries, reference, compare_cols, gene_cols, exact_cols,
       Symscan.runSymscanAnnotation's `return_pairs`; the query rows beyond
       symscan's limits, scored directly instead).
     """
-    exact = threshold >= 1.0
-    # An exact match is 0 substitutions under either metric -- the same
-    # thing, and the only way to run exact agreement on pooled 'CDRs'.
-    distance_type = 'hamming' if exact else metric
-    tolerance = 0 if exact else 1 - threshold
-    gates = dict(id_col=DEFAULT_ID_COL, exact_cols=exact_cols or None,
-                 gene_cols=gene_cols or None)
+    tolerance, options = _compareOptions(gene_cols, exact_cols, threshold, metric)
 
     # Deferred: Symscan builds on this module's helpers.
     from immvoke.Sources.Specificity.Symscan import runSymscanAnnotation
 
-    options = dict(distance_type=distance_type, threshold_is_fraction=not exact,
-                   **gates)
     result, pairs = runSymscanAnnotation(queries, reference, compare_cols, tolerance,
                                          threads=threads, return_pairs=True,
                                          warn_skipped=False, **options)
@@ -640,6 +632,67 @@ def _runSingleChain(queries, reference, compare_cols, gene_cols, exact_cols,
                  .reset_index(drop=True))
 
     return pairs, skipped
+
+
+def _compareOptions(gene_cols, exact_cols, threshold, metric):
+    """
+    Turn the run's options into the arguments the comparison takes, so the
+    thresholded search and the full matrix are gated identically.
+
+    Arguments:
+      gene_cols (list): gene call columns that must agree, possibly empty.
+      exact_cols (list): columns that must agree exactly, possibly empty.
+      threshold (float): identity in (0.0, 1.0]; 1.0 is an exact match.
+      metric (str): 'hamming' or 'levenshtein'.
+
+    Returns:
+      tuple: (tolerance, keyword arguments).
+    """
+    exact = threshold >= 1.0
+
+    # An exact match is 0 substitutions under either metric -- the same
+    # thing, and the only way to run exact agreement on pooled 'CDRs'.
+    return (0 if exact else 1 - threshold,
+            dict(distance_type='hamming' if exact else metric,
+                 threshold_is_fraction=not exact, id_col=DEFAULT_ID_COL,
+                 exact_cols=exact_cols or None, gene_cols=gene_cols or None))
+
+
+def _fullMatrixBlocks(queries, reference, compare_cols, tolerance, options):
+    """
+    Every (query, reference) pair the gates admit, with its identity,
+    whatever its distance -- the --full-dist-matrix table.
+
+    The annotation table answers "what did this query match"; the matrix
+    answers "how close is this query to everything it was compared with",
+    so --identity-threshold does not apply to it. The gates still do: a
+    pair of different V or J gene was never a candidate (--partition-by),
+    and under 'hamming' only equal-length sequences have a distance at all,
+    so unequal ones are left out rather than given a blank.
+
+    Yielded in blocks rather than one table: without --partition-by this is
+    every pair of both tables, which for a repertoire against IEDB is
+    hundreds of millions of rows -- far more than fits in memory, though
+    each block streams to disk fine.
+
+    Arguments:
+      queries (pandas.DataFrame): the query rows that were compared.
+      reference (pandas.DataFrame): the reference rows.
+      compare_cols (list): the column(s) compared.
+      tolerance (float): unused for selection; `allPairDistances` needs it
+        to mark `within_threshold`, which this drops.
+      options (dict): the rest of the comparison's keyword arguments.
+
+    Yields:
+      pandas.DataFrame: `query_row`, `hit_id`, `identity`, in query order,
+      closest first within a query.
+    """
+    from immvoke.Sources.Specificity.Distances import allPairDistances
+
+    for block in allPairDistances(queries, reference, compare_cols, tolerance,
+                                  **options):
+        yield (block[['query_row', 'reference_id', 'identity']]
+               .rename(columns={'reference_id': 'hit_id'}))
 
 
 def _scoreSkippedRows(rows, queries, reference, compare_cols, tolerance, options):
@@ -861,8 +914,10 @@ def _writeOutputs(outdir, prefix, result, matrix, metadata):
       outdir (str): the folder to write into, or None to skip writing.
       prefix (str): the reference's name, from _outputPrefix.
       result (pandas.DataFrame): the annotation result.
-      matrix (pandas.DataFrame): every hit within the threshold, one row per
-        (query, hit), or None when full_dist_matrix was not asked for.
+      matrix (iterable): the full matrix as DataFrames to write one after
+        another -- it can outgrow memory, so it is streamed rather than
+        built whole (see _fullMatrixBlocks) -- or None when
+        full_dist_matrix was not asked for.
       metadata (dict): the run record, see annotateSpecificity.
     """
     if outdir is None:
@@ -878,8 +933,14 @@ def _writeOutputs(outdir, prefix, result, matrix, metadata):
     stale = out / ('%s_%s' % (prefix, FULL_MATRIX_FILE))
     if matrix is not None:
         names.append(stale.name)
-        # Identity to 4 decimals: 0.4231, not 0.42307692307692313.
-        matrix.round({'identity': 4}).to_csv(out / names[-1], sep='\t', index=False)
+        rows = 0
+        with open(stale, 'w', newline='') as handle:
+            for block in matrix:
+                # Identity to 4 decimals: 0.4231, not 0.42307692307692313.
+                block.round({'identity': 4}).to_csv(handle, sep='\t', index=False,
+                                                    header=not rows)
+                rows += len(block)
+        metadata['results']['full_matrix_rows'] = rows
     elif stale.is_file():
         stale.unlink()
         log.info('  removed %s, left by an earlier run that asked for it',
@@ -943,10 +1004,11 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
         reference with the reference's source database, the counts, and
         the immvoke version, time and command).
       full_dist_matrix (bool): also write FULL_MATRIX_FILE into `outdir`:
-        every hit within the threshold, not only the best ones, one row per
-        (query, hit) -- `sequence_id`, `hit_id`, `identity`; under
-        `paired`, `cell_id`, `hit_id` and `matched_chains` (`both`, `heavy`
-        or `light`).
+        every pair the gates admit and how close it is, one row per
+        (query, hit) -- `sequence_id`, `hit_id`, `identity`.
+        `identity_threshold` does not apply to it (see _fullMatrixBlocks),
+        `partition_by` does; under `paired`, `cell_id`, `hit_id` and
+        `matched_chains` (`both`, `heavy` or `light`).
 
     Returns:
       pandas.DataFrame: when `paired`, one row per query `cell_id` (see
@@ -1025,10 +1087,12 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
             'query_antibodies': len(result), 'classification': classes,
             'skipped_query_rows': result.attrs['skipped_query_rows'],
             'pairs': len(pairs)}
+        # One block: a paired run's matrix is one row per matched antibody
+        # pair, which cannot outgrow memory the way a distance matrix can.
+        _writeOutputs(outdir, prefix, result, [pairs] if full_dist_matrix else None,
+                      metadata)
         Report.annotationCompleted(time.monotonic() - started,
                                    metadata['results'], paired=True)
-        _writeOutputs(outdir, prefix, result, pairs if full_dist_matrix else None,
-                      metadata)
 
         return result
 
@@ -1070,13 +1134,18 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
     metadata['results'] = {
         'query_rows_compared': compared, 'query_rows_with_hits': len(result),
         'query_rows_scored_directly': len(skipped), 'hits': len(pairs)}
-    Report.annotationCompleted(time.monotonic() - started, metadata['results'],
-                               paired=False)
     result = _withQueryIds(result, queries)
     matrix = None
     if full_dist_matrix:
-        matrix = _withQueryIds(pairs[['query_row', 'reference_id', 'identity']]
-                               .rename(columns={'reference_id': 'hit_id'}), queries)
+        if not gene_cols:
+            log.warning('--full-dist-matrix without --partition-by scores every '
+                        'pair of both tables, which on a repertoire is tens of '
+                        'millions of rows; --partition-by V, VJ or VJL narrows it')
+        tolerance, options = _compareOptions(gene_cols, exact_cols, threshold, metric)
+        matrix = (_withQueryIds(block, queries) for block in
+                  _fullMatrixBlocks(queries, ref, compare_cols, tolerance, options))
     _writeOutputs(outdir, prefix, result, matrix, metadata)
+    Report.annotationCompleted(time.monotonic() - started, metadata['results'],
+                               paired=False)
 
     return result
