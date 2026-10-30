@@ -15,6 +15,7 @@ import pandas
 # Immvoke imports
 from immvoke.Exceptions import AnnotationError
 from immvoke.Sources.Specificity import Symscan
+from immvoke.Sources.Specificity.Genes import buildGeneGate
 from immvoke.Sources.Specificity.Symscan import (
     MAX_DISTANCE,
     runSymscanAnnotation,
@@ -352,6 +353,94 @@ def randomTables(seed):
 
     return (frame([row() for _ in range(40)]),
             frame([row(i) for i in range(70)]))
+
+
+class TestGeneGrouping(unittest.TestCase):
+    """
+    Tests for searching one gene group at a time (_geneGroups)
+    """
+
+    @staticmethod
+    def _rows(*specs):
+        return frame([{'sequence_id': sid, 'cdr3_aa': cdr3, 'v_call': v, 'j_call': j}
+                      for sid, cdr3, v, j in specs])
+
+    def _pairs(self, queries, reference, gene_cols, **kwargs):
+        """The (query_row, reference_id) pairs found, as a sorted set."""
+        _, pairs = runSymscanAnnotation(
+            queries, reference, ['cdr3_aa'], kwargs.pop('tolerance', 2),
+            id_col='sequence_id', gene_cols=gene_cols, return_pairs=True,
+            warn_skipped=False, **kwargs)
+
+        return sorted(zip(pairs['query_row'].tolist(),
+                          pairs['reference_id'].tolist()))
+
+    def test_grouping_finds_what_the_gate_alone_would_keep(self):
+        """Grouping decides what is compared, the gate what is kept: the
+        two must agree, so searching per gene group loses no pair an
+        ungrouped search would have kept."""
+        queries = self._rows(
+            ('q1', 'CARDYW', 'IGHV1-2*01', 'IGHJ4*02'),
+            ('q2', 'CARDYW', 'IGHV3-7*01', 'IGHJ4*02'),
+            ('q3', 'CARDYY', 'IGHV1-2*03', 'IGHJ6*01'))
+        reference = self._rows(
+            ('r_same', 'CARDYW', 'IGHV1-2*02', 'IGHJ4*01'),
+            ('r_otherV', 'CARDYW', 'IGHV5-9*01', 'IGHJ4*02'),
+            ('r_otherJ', 'CARDYW', 'IGHV1-2*01', 'IGHJ6*02'),
+            ('r_q3', 'CARDYY', 'IGHV1-2*01', 'IGHJ6*01'))
+
+        grouped = self._pairs(queries, reference, ['v_call', 'j_call'])
+        # Every pair an ungrouped search finds, kept by the same gate.
+        gate = buildGeneGate(queries, reference, ['v_call', 'j_call'])
+        ids = reference['sequence_id'].tolist()
+        ungrouped = [(q, rid) for q, rid in self._pairs(queries, reference, None)
+                     if gate.agrees(q, ids.index(rid))]
+
+        self.assertEqual(grouped, sorted(ungrouped))
+        # r_otherJ has q1's V but not its J, yet shares both with q3.
+        self.assertEqual(grouped, [(0, 'r_same'), (2, 'r_otherJ'), (2, 'r_q3')])
+
+    def test_a_row_calling_several_genes_is_searched_under_each(self):
+        """A call naming two genes agrees with either, so its row belongs
+        to both groups rather than only the first."""
+        queries = self._rows(('q1', 'CARDYW', 'IGHV1-2*01, IGHV3-7*02', 'IGHJ4*02'))
+        reference = self._rows(('r_first', 'CARDYW', 'IGHV1-2*05', 'IGHJ4*01'),
+                               ('r_second', 'CARDYW', 'IGHV3-7*01', 'IGHJ4*03'),
+                               ('r_neither', 'CARDYW', 'IGHV5-9*01', 'IGHJ4*02'))
+
+        self.assertEqual(self._pairs(queries, reference, ['v_call', 'j_call']),
+                         [(0, 'r_first'), (0, 'r_second')])
+
+    def test_an_unrecognized_call_matches_nothing(self):
+        """As the gate has it: a blank or unparseable call agrees with no
+        gene, so its row gets no group and no hit."""
+        queries = self._rows(('q1', 'CARDYW', '', 'IGHJ4*02'),
+                             ('q2', 'CARDYW', 'not a gene', 'IGHJ4*02'),
+                             ('q3', 'CARDYW', 'IGHV1-2*01', 'IGHJ4*02'))
+        reference = self._rows(('r1', 'CARDYW', 'IGHV1-2*01', 'IGHJ4*02'))
+
+        self.assertEqual(self._pairs(queries, reference, ['v_call', 'j_call']),
+                         [(2, 'r1')])
+
+    def test_grouping_narrows_what_symscan_is_asked_to_compare(self):
+        """The point of grouping: references of another gene are never
+        indexed, rather than compared and then discarded."""
+        queries = self._rows(('q1', 'CARDYW', 'IGHV1-2*01', 'IGHJ4*02'))
+        # One reference of the query's gene, nineteen of other genes.
+        reference = self._rows(
+            ('r_same', 'CARDYW', 'IGHV1-2*04', 'IGHJ4*02'),
+            *[('r%d' % i, 'CARDYW', 'IGHV%d-9*01' % i, 'IGHJ4*02') for i in range(19)])
+
+        with mock.patch.object(Symscan.symscan, 'get_neighbors_across',
+                               side_effect=Symscan.symscan.get_neighbors_across) as call:
+            self._pairs(queries, reference, ['v_call', 'j_call'])
+            grouped = max(len(c.args[1]) for c in call.call_args_list)
+            call.reset_mock()
+            self._pairs(queries, reference, None)
+            ungrouped = max(len(c.args[1]) for c in call.call_args_list)
+
+        self.assertEqual(ungrouped, 20)
+        self.assertEqual(grouped, 1)
 
 
 class TestSymscanMatchesBruteForce(unittest.TestCase):

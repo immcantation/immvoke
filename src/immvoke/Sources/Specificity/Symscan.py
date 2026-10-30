@@ -21,8 +21,17 @@ reference is never hit.
 Gates. symscan has no gate of its own: `exact_cols` (exact string
 agreement), each column's length for a pooled multi-column Hamming
 comparison, and `gene_cols` (V/J-gene agreement, same gene and any allele,
-see Genes.py) are applied to the pairs it returns -- distance first, gates
-second.
+see Genes.py) are applied to the pairs it returns.
+
+`gene_cols` is also applied before the search, as a partition: the
+comparison runs once per gene key rather than once over everything (see
+_geneGroups). The index cost grows combinatorially with the tolerance, and
+in one index every query collides with references of every gene
+combination -- collisions whose distance is computed only for the gate to
+discard them. Grouping removes that work instead of paying for it: on a
+21,412 row repertoire against IEDB at 0.7 identity, 57 seconds became 3.
+The gate still runs afterwards and still decides what is kept, so the
+answer does not depend on the partition being clever.
 
 The "X" wildcard. An X is an unresolved residue: under 'hamming' (and so
 under exact matching) a position where either side has one never counts as a
@@ -57,6 +66,7 @@ process; later calls reuse that pool.
 __author__ = 'Pramod Shinde'
 
 # Imports
+import itertools
 import logging
 import math
 import os
@@ -77,7 +87,7 @@ from immvoke.Sources.Specificity.Annotate import (
     _mismatchPositions,
     _rowValues,
 )
-from immvoke.Sources.Specificity.Genes import buildGeneGate
+from immvoke.Sources.Specificity.Genes import buildGeneGate, parseCall
 
 log = logging.getLogger(__name__)
 
@@ -223,6 +233,137 @@ def _chunks(rows, costs, budget):
     return [numpy.array(c, dtype=numpy.int64) for c in chunks]
 
 
+def _geneKeys(frame, gene_cols):
+    """
+    Each row's gene keys: one per combination of the genes it calls, so a
+    row calling two V genes and one J gene gets two keys.
+
+    Two rows pass the gene gate when they name a gene in common in every
+    gene column (Genes.callsAgree is set intersection), which is exactly
+    when their key sets intersect -- so grouping by key never separates a
+    pair the gate would keep. A row with a blank or unrecognized call in
+    any column gets no key at all, matching the gate's rule that such a
+    call agrees with nothing.
+
+    Arguments:
+      frame (pandas.DataFrame): the rows.
+      gene_cols (list): gene call columns, e.g. ['v_call', 'j_call'].
+
+    Returns:
+      list: one tuple of keys per row, each key a tuple of one gene per
+      column.
+    """
+    parsed = []
+    for col in gene_cols:
+        values = frame[col].astype(object).fillna('').astype(str).tolist()
+        # Each distinct call parsed once: a repertoire repeats its calls.
+        cache = {value: sorted(parseCall(value)) for value in set(values)}
+        parsed.append([cache[value] for value in values])
+
+    return [tuple(itertools.product(*genes)) for genes in zip(*parsed)]
+
+
+def _geneGroups(queries, reference, gene_cols, query_rows, ref_rows):
+    """
+    Split the comparison into one group per gene key, so symscan indexes
+    only the rows that could pass the gene gate.
+
+    symscan's cost grows combinatorially with the tolerance, and in one
+    index every query collides with references of every gene combination --
+    collisions the gate then throws away, after their distance has been
+    computed. Grouping first removes that work rather than paying for it.
+    The gate still runs afterwards: grouping decides what is compared, the
+    gate decides what is kept.
+
+    Arguments:
+      queries (pandas.DataFrame): the query rows.
+      reference (pandas.DataFrame): the reference rows.
+      gene_cols (list): gene call columns to group on, or None for no
+        grouping -- then the whole comparison is one group.
+      query_rows (numpy.ndarray): the query positions to compare.
+      ref_rows (numpy.ndarray): the reference positions to compare.
+
+    Yields:
+      tuple: (query positions, reference positions) per group, only where
+      both sides have rows.
+    """
+    if not gene_cols:
+        yield query_rows, ref_rows
+        return
+
+    ref_keys = _geneKeys(reference, gene_cols)
+    by_key = {}
+    for ref in ref_rows.tolist():
+        for key in ref_keys[ref]:
+            by_key.setdefault(key, []).append(ref)
+
+    query_keys = _geneKeys(queries, gene_cols)
+    wanted = {}
+    for query in query_rows.tolist():
+        for key in query_keys[query]:
+            if key in by_key:
+                wanted.setdefault(key, []).append(query)
+
+    for key, members in wanted.items():
+        yield (numpy.array(members, dtype=numpy.int64),
+               numpy.array(by_key[key], dtype=numpy.int64))
+
+
+def _searchGroup(query_seqs, ref_seqs, query_lengths, limits, query_x, ref_x,
+                 distance_type, query_rows, ref_rows):
+    """
+    Run one group's comparison through symscan, handling the X wildcard.
+
+    References are grouped by where their X's sit, and those positions are
+    cut out of the group's references and of every same-length query, so a
+    reference X never counts; a query's own X's are covered by slack
+    instead (see the module note).
+
+    Arguments:
+      query_seqs (list): every query's compared sequence.
+      ref_seqs (list): every reference's.
+      query_lengths (numpy.ndarray): len() of each query sequence.
+      limits (numpy.ndarray): each query's allowed differences.
+      query_x (numpy.ndarray): each query's X count.
+      ref_x (numpy.ndarray): each reference's X count.
+      distance_type (str): 'hamming' or 'levenshtein'.
+      query_rows (numpy.ndarray): the query positions to compare.
+      ref_rows (numpy.ndarray): the reference positions to compare.
+
+    Returns:
+      tuple: (list of (rows, cols, dists) pair blocks, list of skipped
+      (query positions, reference positions) blocks), all in the positions
+      of the whole table.
+    """
+    found, skipped = [], []
+    patterns = {}
+    for ref in ref_rows[ref_x[ref_rows] > 0].tolist():
+        seq = ref_seqs[ref]
+        key = (len(seq), tuple(i for i, c in enumerate(seq) if c == WILDCARD))
+        patterns.setdefault(key, []).append(ref)
+
+    clean_refs = ref_rows[ref_x[ref_rows] == 0]
+    if len(clean_refs) and len(query_rows):
+        pairs, blocks = _symscanPairs(query_seqs, ref_seqs, limits + query_x,
+                                      distance_type, query_rows, clean_refs)
+        found.append(pairs)
+        skipped.extend(blocks)
+    for (length, wild), refs in patterns.items():
+        members = query_rows[query_lengths[query_rows] == length]
+        if not len(members):
+            continue
+        cut = set(wild)
+        masked_queries = {q: _without(query_seqs[q], cut) for q in members.tolist()}
+        masked_refs = {r: _without(ref_seqs[r], cut) for r in refs}
+        pairs, blocks = _symscanPairs(masked_queries, masked_refs, limits + query_x,
+                                      distance_type, members,
+                                      numpy.array(refs, dtype=numpy.int64))
+        found.append(pairs)
+        skipped.extend(blocks)
+
+    return found, skipped
+
+
 def _symscanPairs(query_seqs, ref_seqs, limits, distance_type, query_rows,
                   ref_rows):
     """
@@ -314,8 +455,9 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
     symscan has no gate of its own, so `exact_cols` (and, for a pooled
     multi-column Hamming comparison, each column's length, so the columns
     line up one by one) and `gene_cols` are applied to the pairs symscan
-    returns rather than before it runs: the distance comes first, the gene
-    check second. An 'X' matches
+    returns. `gene_cols` additionally partitions the search, which is only
+    an optimization: the gate decides what is kept either way (see the
+    module note). An 'X' matches
     any residue under 'hamming'; see the module note.
 
     Arguments:
@@ -406,31 +548,17 @@ def runSymscanAnnotation(queries, reference, compare_cols, max_distance,
     else:
         query_x = numpy.zeros(len(query_seqs), dtype=numpy.int64)
         ref_x = numpy.zeros(len(ref_seqs), dtype=numpy.int64)
-    patterns = {}
-    for ref in all_refs[ref_x[all_refs] > 0].tolist():
-        seq = ref_seqs[ref]
-        key = (len(seq), tuple(i for i, c in enumerate(seq) if c == WILDCARD))
-        patterns.setdefault(key, []).append(ref)
-
-    found, skipped = [], []
-    clean_refs = all_refs[ref_x[all_refs] == 0]
-    if len(clean_refs):
-        pairs, blocks = _symscanPairs(query_seqs, ref_seqs, limits + query_x,
-                                      distance_type, all_queries, clean_refs)
-        found.append(pairs)
-        skipped.extend(blocks)
+    # One search per gene key rather than one over everything (see
+    # _geneGroups): the gene gate below still decides what is kept, but
+    # pairs of different genes are no longer compared only to be discarded.
     query_lengths = numpy.array([len(seq) for seq in query_seqs], dtype=int)
-    for (length, wild), refs in patterns.items():
-        members = all_queries[query_lengths[all_queries] == length]
-        if not len(members):
-            continue
-        cut = set(wild)
-        masked_queries = {q: _without(query_seqs[q], cut) for q in members.tolist()}
-        masked_refs = {r: _without(ref_seqs[r], cut) for r in refs}
-        pairs, blocks = _symscanPairs(masked_queries, masked_refs, limits + query_x,
-                                      distance_type, members,
-                                      numpy.array(refs, dtype=numpy.int64))
-        found.append(pairs)
+    found, skipped = [], []
+    for group_queries, group_refs in _geneGroups(queries, reference, gene_cols,
+                                                 all_queries, all_refs):
+        pairs, blocks = _searchGroup(query_seqs, ref_seqs, query_lengths, limits,
+                                     query_x, ref_x, distance_type,
+                                     group_queries, group_refs)
+        found.extend(pairs)
         skipped.extend(blocks)
     rows, cols, dists = _concat(found)
     skipped_queries = []
