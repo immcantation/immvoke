@@ -175,17 +175,23 @@ immvoke annotate --query mine.tsv --reference databases/iedb/iedb_bcr.tsv \
 
 ### Output
 
-Each run writes two files into its `--outdir`, kept apart from the
+Each run writes three files into its `--outdir`, kept apart from the
 downloaded databases, each named after the reference's database and table,
-`<db>_<table>_`, and a third with `--full-dist-matrix`:
+`<db>_<table>_`, and a fourth with `--full-dist-matrix`:
 
 ```
 annotation/exact/
-├── iedb_bcr_annotation.tsv               # one row per query: its best hits
+├── iedb_bcr_annotation.tsv               # one row per (query row, matching
+│                                         # reference row): its best hits
+├── iedb_bcr_annotation_summary.txt       # the run and its files in prose
 ├── iedb_bcr_annotation_metadata.yml      # the options, query, reference and its
 │                                         # database, counts, version, time and command
 └── iedb_bcr_annotation_full_matrix.txt   # --full-dist-matrix: every compared pair
 ```
+
+`<db>_<table>_annotation_summary.txt` says in plain words what was
+compared, what came of it and what each of the other files holds, so the
+folder explains itself without reading the YAML.
 
 The database is read off the `download_metadata.yml` that `immvoke
 specificity` writes beside the reference table, and the table off its file
@@ -194,27 +200,27 @@ overwriting each other. A reference without that record is named by its
 file name alone (`myref.tsv` gives `myref_annotation.tsv`), and a DataFrame
 passed from Python by `reference_`.
 
-`<db>_<table>_annotation.tsv`, without `--paired`, has one row per query
-heavy chain row that matched something; a row with no hit is left out, its
-count kept in the metadata. Of a query's hits it keeps the
-**best**: the ones with the highest identity, all of them when several tie.
+`<db>_<table>_annotation.tsv`, without `--paired`, is **long**: one row
+per (query heavy chain row, matching reference row). A query row with
+three hits has three rows; a query row with no hit has none, its count
+kept in the metadata. Of a query's hits it keeps the **best**: the ones
+with the highest identity, all of them when several tie.
 
 | Column | Meaning |
 | --- | --- |
 | `sequence_id` | the query's own `sequence_id`, so the table joins straight back to the query file (`query_row`, its position among the heavy chain rows, for a query without that column) |
-| `n_hits` | how many best hits (0 without a hit) |
-| `identity` | their identity, `1 - mismatches / query length` (an `X` counts as identical under `hamming`) |
-| `hit_ids` | their reference `sequence_id`s, `;`-joined |
-| `antigen` | each hit's antigen (`iedb_antigen`), in `hit_ids` order |
-| `epitope` | each hit's epitope (`iedb_epitope_name`) |
-| `antigen_source_species` | the organism each hit's antigen comes from (`iedb_antigen_source_species`) |
+| `identity` | the hit's identity, `1 - mismatches / query length` (an `X` counts as identical under `hamming`) |
+| `hit_id` | the hit's reference `sequence_id` |
+| `antigen` | its antigen (`iedb_antigen`) |
+| `epitope` | its epitope (`iedb_epitope_name`) |
+| `antigen_source_species` | the organism that antigen comes from (`iedb_antigen_source_species`) |
 
-Hits are separated by `;` rather than commas, since IEDB names a
-discontinuous epitope by its residues (`G58, L59, S61`). IEDB lists a
-receptor once per epitope it was tested against, all under its
-`sequence_id`, so one hit can stand for several epitopes; their values are
-joined with ` | ` within that hit's entry. A reference without IEDB's
-columns leaves those three blank.
+One row per hit rather than a joined cell, because there is no separator
+IEDB's own names leave free: a discontinuous epitope is named by its
+residues (`G58, L59, S61`), and 1,576 of its epitope names contain a `;`.
+IEDB also lists a receptor once per epitope it was tested against, all
+under one `sequence_id`, so a hit standing for several epitopes gets a row
+for each. A reference without IEDB's columns leaves those three blank.
 
 With `--paired`, one row per query antibody (`cell_id`): `classification`
 (`both`, `heavy_only`, `light_only`, `conflicting` or `neither`),

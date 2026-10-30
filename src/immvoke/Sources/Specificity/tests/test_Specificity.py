@@ -672,7 +672,7 @@ class TestIedbAirrExport(unittest.TestCase):
             single = annotateSpecificity(frame, path)
             paired = annotateSpecificity(frame, path, paired=True)
 
-        self.assertEqual(single['hit_ids'].tolist(), ['1284_1'])
+        self.assertEqual(single['hit_id'].tolist(), ['1284_1'])
         self.assertEqual(paired['classification'].tolist(), ['both'])
 
     def test_download_removes_the_raw_mirror(self):

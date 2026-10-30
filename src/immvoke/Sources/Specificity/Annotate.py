@@ -2,10 +2,10 @@
 Antigen specificity annotation: query-vs-reference receptor comparison
 
 For each row of a query AIRR table, find every row of a fixed reference AIRR
-table it agrees with, and report its best hits -- one annotation per query
-row that matched something (its `sequence_id`, `n_hits`, `identity`,
-`hit_ids` and each hit's `antigen`, `epitope` and
-`antigen_source_species`), plus, on request, how close every pair the
+table it agrees with, and report its best hits -- one row per (query row,
+matching reference row): its `sequence_id`, `identity`, `hit_id` and that
+hit's `antigen`, `epitope` and `antigen_source_species`, long rather than
+wide so no cell has to hold two values -- plus, on request, how close every pair the
 filters admit is (full_dist_matrix). This is the last pipeline stage: download a
 specificity database's table, which lands as an AIRR rearrangement TSV in
 the database's own folder (`immvoke specificity iedb download bcr`), then
@@ -83,6 +83,7 @@ DEFAULT_COUNT_FIELD = 'duplicate_count'
 ANNOTATION_FILE = 'annotation.tsv'
 ANNOTATION_METADATA = 'annotation_metadata.yml'
 FULL_MATRIX_FILE = 'annotation_full_matrix.txt'
+ANNOTATION_SUMMARY = 'annotation_summary.txt'
 
 #: What the result reports about each best hit -> the reference column it
 #: comes from (IEDB's, see Iedb.py); a reference without one leaves it blank.
@@ -91,12 +92,6 @@ HIT_ANNOTATIONS = (
     ('epitope', 'iedb_epitope_name'),
     ('antigen_source_species', 'iedb_antigen_source_species'),
 )
-#: Separates hits in hit_ids and HIT_ANNOTATIONS' columns -- not a comma,
-#: which IEDB's discontinuous epitope names ('G58, L59, ...') are full of.
-HIT_SEP = ';'
-#: Separates one hit's values when it stands for several reference rows:
-#: IEDB lists a receptor once per epitope, all under its sequence_id.
-VALUE_SEP = ' | '
 
 #: Slack added before truncating a fraction-of-length threshold to a count,
 #: so float error can't drop it by one (e.g. (1 - 0.9) * 10 is 0.99999...).
@@ -730,79 +725,76 @@ def _scoreSkippedRows(rows, queries, reference, compare_cols, tolerance, options
     return found.reset_index(drop=True)
 
 
-def _hitValues(reference):
+def _hitRows(reference):
     """
-    What each reference id says for HIT_ANNOTATIONS: its distinct values
-    across every row with that id, VALUE_SEP joined in reference order.
+    What each reference id says for HIT_ANNOTATIONS, one entry per
+    reference row with that id -- IEDB lists an antibody once per epitope
+    it was tested against, and each of those rows becomes a row of the
+    annotation table.
 
     Arguments:
       reference (pandas.DataFrame): the reference rows that were compared.
 
     Returns:
-      dict: result column -> {reference id -> text}; a column the reference
-      lacks maps every id to ''.
+      dict: reference id -> list of value tuples, one per row with that id,
+      in reference order, duplicates dropped; a column the reference lacks
+      reads as ''. An id absent from the reference is not a key.
     """
-    ids = reference[DEFAULT_ID_COL].astype(str)
-    values = {}
-    for name, column in HIT_ANNOTATIONS:
-        if column not in reference.columns:
-            values[name] = {}
-            continue
-        text = reference[column].astype(object).fillna('').astype(str)
-        values[name] = {
-            hit: VALUE_SEP.join(dict.fromkeys(x for x in group if x))
-            for hit, group in text.groupby(ids.to_numpy(), sort=False)}
+    ids = reference[DEFAULT_ID_COL].astype(str).tolist()
+    columns = [reference[column].astype(object).fillna('').astype(str).tolist()
+               if column in reference.columns else [''] * len(reference)
+               for _, column in HIT_ANNOTATIONS]
 
-    return values
+    rows = {}
+    for position, hit in enumerate(ids):
+        # dict.fromkeys: an id whose rows repeat the same values (one
+        # epitope recorded twice) should not repeat them in the output.
+        rows.setdefault(hit, {})[tuple(c[position] for c in columns)] = None
+
+    return {hit: list(values) for hit, values in rows.items()}
 
 
-def _bestHits(pairs, n_queries, reference):
+def _bestHits(pairs, reference):
     """
-    Summarize each query row by its best hits: the ones with the highest
-    identity, all of them on a tie.
+    Each query row's best hits -- the ones with the highest identity, all
+    of them on a tie -- one row per matching reference row.
+
+    Long rather than wide: a query with three hits gets three rows, not one
+    row holding three joined values. Nothing has to be separated, so
+    nothing can be mis-separated, which matters because IEDB's own epitope
+    names contain both the ';' and the '|' a joined cell would need.
 
     Arguments:
       pairs (pandas.DataFrame): every hit, from _runSingleChain.
-      n_queries (int): how many query rows were compared; one without a
-        hit still gets a row.
       reference (pandas.DataFrame): the reference rows that were compared,
         for HIT_ANNOTATIONS.
 
     Returns:
-      pandas.DataFrame: one row per query row, including those without a
-      hit (annotateSpecificity drops those once it has counted them):
-      `query_row`, `n_hits` (how many best hits), `identity` (theirs, to 4
-      decimals), `hit_ids` and HIT_ANNOTATIONS' columns, one entry per hit,
-      HIT_SEP joined in the same order; 0 hits and blanks for a query row
-      without one.
+      pandas.DataFrame: `query_row`, `identity` (to 4 decimals), `hit_id`
+      and HIT_ANNOTATIONS' columns, one row per (query row, reference row
+      of one of its best hits), by query row then identity. A query row
+      without a hit has no row at all.
     """
     names = [name for name, _ in HIT_ANNOTATIONS]
-    columns = ['query_row', 'n_hits', 'identity', 'hit_ids'] + names
-    result = pandas.DataFrame({'query_row': numpy.arange(n_queries)})
+    columns = ['query_row', 'identity', 'hit_id'] + names
+    if not len(pairs):
+        return pandas.DataFrame({column: [] for column in columns})
 
-    if len(pairs):
-        # One query row's identities share its length, so the fewest
-        # mismatches is the highest identity, without comparing floats.
-        fewest = pairs.groupby('query_row')['mismatches'].transform('min')
-        best = pairs[pairs['mismatches'] == fewest]
-        values = _hitValues(reference)
-        grouped = best.groupby('query_row', sort=True)
-        hits = pandas.DataFrame({
-            'n_hits': grouped.size(),
-            'identity': grouped['identity'].first().round(4),
-            'hit_ids': grouped['reference_id'].agg(HIT_SEP.join)})
-        for name in names:
-            hits[name] = grouped['reference_id'].agg(
-                lambda ids, lookup=values[name]: HIT_SEP.join(lookup.get(x, '')
-                                                              for x in ids))
-        result = result.join(hits, on='query_row')
+    # One query row's identities share its length, so the fewest mismatches
+    # is the highest identity, without comparing floats.
+    fewest = pairs.groupby('query_row')['mismatches'].transform('min')
+    best = pairs[pairs['mismatches'] == fewest].sort_values(
+        ['query_row', 'reference_id'], kind='stable')
+    rows = _hitRows(reference)
 
-    result = result.reindex(columns=columns)
-    result['n_hits'] = result['n_hits'].fillna(0).astype(int)
-    for name in ['hit_ids'] + names:
-        result[name] = result[name].astype(object).fillna('').astype(str)
+    blank = ('',) * len(names)
+    records = [(query, identity, hit) + values
+               for query, identity, hit in zip(best['query_row'],
+                                               best['identity'].round(4),
+                                               best['reference_id'])
+               for values in rows.get(hit, [blank])]
 
-    return result
+    return pandas.DataFrame(records, columns=columns)
 
 
 def _withQueryIds(table, queries):
@@ -898,6 +890,93 @@ def _outputPrefix(reference, source):
     return '%s_%s' % (source, table)
 
 
+def _summaryText(prefix, metadata, files):
+    """
+    The run in prose: what was compared, what came of it, and what each
+    file beside this one holds -- so the folder explains itself without
+    reading the YAML or this module.
+
+    Arguments:
+      prefix (str): the reference's name, from _outputPrefix.
+      metadata (dict): the run record, see annotateSpecificity.
+      files (list): the file names written, in order.
+
+    Returns:
+      str: the summary, ending in a newline.
+    """
+    options, results = metadata['options'], metadata['results']
+    paired = options['paired']
+    threshold = options['identity_threshold']
+
+    def named(record, fallback):
+        return record['path'] or fallback
+
+    lines = ['Annotation of %s' % named(metadata['query'], 'a table passed from Python'),
+             '           against %s' % named(metadata['reference'],
+                                             'a reference passed from Python'),
+             'Finished: %s' % metadata['finished'], '']
+
+    lines.append('What was compared')
+    if paired:
+        lines.append('  heavy and light chain of the same antibody, matching on '
+                     'V gene, J gene')
+        lines.append('  and an exact CDR3.')
+    else:
+        lines.append('  %s of each query row, against the same of every reference row.'
+                     % {'CDR3H': 'the heavy chain CDR3 (cdr3_aa)',
+                        'VDJ': 'the V(D)J amino acid sequence (sequence_aa)',
+                        'CDRs': 'CDR1, CDR2 and CDR3 pooled'}
+                     .get(options['sequence_region'], options['sequence_region']))
+        lines.append('  A hit is %s.'
+                     % ('an exact match' if threshold is None else
+                        '%g%% identity or better, by %s distance'
+                        % (threshold * 100, options['distance_metric'])))
+        lines.append('  %s' % {None: 'Any pair of rows was compared.',
+                               'V': 'Only rows of the same V gene were compared.',
+                               'VJ': 'Only rows of the same V and J gene were compared.',
+                               'VJL': 'Only rows of the same V gene, J gene and CDR3 '
+                                      'length were compared.'}
+                     .get(options['partition_by'],
+                          'Partitioned by %s.' % options['partition_by']))
+    lines.append('')
+
+    lines.append('What was found')
+    figures = ([('query antibodies', results['query_antibodies'])]
+               + [(label, count) for label, count
+                  in results.get('classification', {}).items()]
+               if paired else
+               [('query rows compared', results['query_rows_compared']),
+                ('query rows with a hit', results['query_rows_with_hits']),
+                ('rows in the annotation', results['annotation_rows'])])
+    if 'full_matrix_rows' in results:
+        figures.append(('pairs in the full matrix', results['full_matrix_rows']))
+    pad = max(len(label) for label, _ in figures) + 2
+    lines += ['  %s%s' % (label.ljust(pad), format(count, ','))
+              for label, count in figures]
+    lines.append('')
+
+    lines.append('The files')
+    what = {
+        ANNOTATION_FILE: ('one row per (query antibody)' if paired else
+                          'one row per (query row, matching reference row): a query '
+                          'row\n    with several hits has a row for each, so no cell '
+                          'holds two values.\n    Only the best hits are here -- the '
+                          'highest identity, all of them on a\n    tie -- and a query '
+                          'row that matched nothing has no row at all'),
+        FULL_MATRIX_FILE: ('every pair the filters admit and how close it is, whether '
+                           'or not\n    it is a hit: the identity threshold does not '
+                           'apply here, the\n    partition does'),
+        ANNOTATION_METADATA: ('the whole record of the run: every option, the input '
+                              'tables and\n    the reference database, the counts '
+                              'above, and the immvoke version,\n    time and command'),
+    }
+    for name in files:
+        lines.append('  %s' % name)
+        lines.append('    %s.' % what[name[len(prefix) + 1:]])
+
+    return '\n'.join(lines) + '\n'
+
+
 def _writeOutputs(outdir, prefix, result, matrix, metadata):
     """
     Write the annotation bundle into `outdir`: ANNOTATION_FILE,
@@ -947,6 +1026,9 @@ def _writeOutputs(outdir, prefix, result, matrix, metadata):
                  stale.name)
     metadata['finished'] = timestamp()
     (out / names[1]).write_text(yaml.safe_dump(metadata, sort_keys=False))
+    summary = '%s_%s' % (prefix, ANNOTATION_SUMMARY)
+    (out / summary).write_text(_summaryText(prefix, metadata, names))
+    names.append(summary)
     log.info('  wrote %s', ', '.join(names))
     log.info('  into %s', out)
 
@@ -1012,16 +1094,16 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
 
     Returns:
       pandas.DataFrame: when `paired`, one row per query `cell_id` (see
-      runPairedExactAnnotation); otherwise one row per heavy chain query
-      row that matched something, a row without a hit left out, with
-      `sequence_id` (the query's own; `query_row`, its position among the
-      heavy chain rows, for a query without that column), then its best
-      hits, the ones
-      with the highest identity (all of them on a tie): `n_hits`,
-      `identity`, `hit_ids`, and each hit's `antigen`, `epitope` and
-      `antigen_source_species` from the reference (HIT_ANNOTATIONS), one
-      entry per hit, HIT_SEP joined in hit_ids order, a hit standing for
-      several reference rows joining its values with VALUE_SEP.
+      runPairedExactAnnotation); otherwise one row per (query heavy chain
+      row, matching reference row), a query row without a hit left out,
+      with `sequence_id` (the query's own; `query_row`, its position among
+      the heavy chain rows, for a query without that column), then the hit,
+      one of the best, the ones
+      with the highest identity (all of them on a tie): `identity`,
+      `hit_id`, and that hit's `antigen`, `epitope` and
+      `antigen_source_species` from the reference (HIT_ANNOTATIONS). A hit
+      standing for several reference rows -- IEDB lists a receptor once per
+      epitope -- gets a row for each, so no cell holds two values.
 
     Raises:
       AnnotationError: if the reference is not an AIRR rearrangement table,
@@ -1125,14 +1207,14 @@ def annotateSpecificity(query, reference, sequence_region='CDR3H',
 
     pairs, skipped = _runSingleChain(queries, ref, compare_cols, gene_cols,
                                      exact_cols, threshold, metric, threads)
-    result = _bestHits(pairs, len(queries), ref)
-    compared = len(result)
-    # A query row with no hit says nothing the metadata's counts do not, and
-    # on a real repertoire it is almost every row, so the table holds only
-    # the rows that matched something.
-    result = result[result['n_hits'].gt(0)].reset_index(drop=True)
+    # Long: one row per (query row, matching reference row), so a query
+    # row with no hit simply has none, as on a real repertoire almost every
+    # row would otherwise be an empty one.
+    result = _bestHits(pairs, ref)
     metadata['results'] = {
-        'query_rows_compared': compared, 'query_rows_with_hits': len(result),
+        'query_rows_compared': len(queries),
+        'query_rows_with_hits': int(result['query_row'].nunique()),
+        'annotation_rows': len(result),
         'query_rows_scored_directly': len(skipped), 'hits': len(pairs)}
     result = _withQueryIds(result, queries)
     matrix = None

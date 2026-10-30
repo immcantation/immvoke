@@ -66,8 +66,11 @@ Specificity:
   counts of the run), each named after the reference's database and table,
   e.g. ``iedb_bcr_annotation.tsv``. The annotation keeps each query's best
   hits, the highest identity (all of them on a tie): ``sequence_id``,
-  ``n_hits``, ``identity``, ``hit_ids`` and each hit's ``antigen``,
-  ``epitope`` and ``antigen_source_species``, ``;`` between hits.
+  ``identity``, ``hit_id`` and that hit's ``antigen``, ``epitope`` and
+  ``antigen_source_species`` -- long rather than wide, one row per (query
+  row, matching reference row), since no separator is safe in IEDB's own
+  epitope names. A summary of the run in prose is written beside it as
+  ``annotation_summary.txt``.
   ``--full-dist-matrix`` also writes ``annotation_full_matrix.txt``:
   every pair the filters admit and how close it is (``sequence_id``,
   ``hit_id``, ``identity``). ``--identity-threshold`` does not apply to it
