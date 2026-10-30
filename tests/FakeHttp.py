@@ -11,6 +11,8 @@ cares about in one line.
 __author__ = 'Susanna Marquez'
 
 # Imports
+import json
+
 import requests
 from requests.structures import CaseInsensitiveDict
 
@@ -32,10 +34,20 @@ class FakeResponse:
         self.headers = CaseInsensitiveDict(headers or {})
         self.closed = False
 
+    @property
+    def text(self):
+        """str: the body decoded as UTF-8, like requests.Response.text."""
+        return self.content.decode('utf-8') if isinstance(self.content, bytes) \
+            else self.content
+
     def iter_content(self, chunk_size=1024):
         """Yield the body in chunk_size pieces."""
         for start in range(0, len(self.content), chunk_size):
             yield self.content[start:start + chunk_size]
+
+    def json(self):
+        """Parse the body as JSON, like requests.Response.json()."""
+        return json.loads(self.content)
 
     def close(self):
         """Mark the response closed."""

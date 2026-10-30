@@ -104,6 +104,13 @@ class TestValidation(unittest.TestCase):
         with self.assertRaises(SchemaError):
             self.schema.validateFilters('nonesuch', {})
 
+    def test_open_values_accept_anything(self):
+        """An open field's values are examples; the source checks the rest."""
+        field = Field(name='antigen', values=('Influenza A virus',), open_values=True)
+
+        self.assertTrue(field.accepts('Yellow fever virus'))
+        self.assertFalse(Field(name='antigen', values=('x',)).accepts('y'))
+
 
 class TestRoundTrip(unittest.TestCase):
     """
@@ -117,6 +124,19 @@ class TestRoundTrip(unittest.TestCase):
         self.assertEqual(again.collection_names, schema.collection_names)
         self.assertEqual(again.getCollection('unpaired').field_names,
                          ('Species', 'Primer'))
+
+    def test_open_values_round_trip_and_stay_out_of_other_fields(self):
+        schema = SourceSchema(source='demo', collections={
+            'c': Collection(name='c', fields=(
+                Field(name='antigen', values=('a',), open_values=True),
+                Field(name='Species', values=('human',))))})
+
+        payload = toDict(schema)
+        fields = payload['collections']['c']['fields']
+
+        self.assertTrue(fields[0]['open_values'])
+        self.assertNotIn('open_values', fields[1])
+        self.assertTrue(fromDict(payload).getCollection('c').fields[0].open_values)
 
     def test_a_newer_snapshot_is_refused(self):
         """
@@ -196,6 +216,28 @@ class TestPackagedSnapshot(unittest.TestCase):
         self.assertIn('Isotype', unpaired)
         self.assertIn('Primer', unpaired)
         self.assertTrue({'BSource', 'BType', 'Subject'} <= paired)
+
+    def test_every_packaged_snapshot_round_trips(self):
+        """
+        A snapshot must serialize back to what is checked in, so that
+        `immvoke schema refresh` on an unchanged source leaves the file
+        alone (see saveSchema) rather than reformatting a tracked file and
+        opening a pull request with no real change in it.
+        """
+        from importlib import resources
+
+        from immvoke.Schema import sameContent, serializeSchema
+
+        root = resources.files('immvoke').joinpath('data/schemas')
+        packaged = sorted(x.name for x in root.iterdir()
+                          if x.joinpath('schema.yaml').is_file())
+        self.assertTrue(packaged, 'no packaged snapshots found')
+
+        for name in packaged:
+            with self.subTest(source=name):
+                stored = root.joinpath(name, 'schema.yaml').read_text()
+                self.assertTrue(sameContent(stored, serializeSchema(loadSchema(name))),
+                                '%s would be rewritten by schema refresh' % name)
 
 
 if __name__ == '__main__':

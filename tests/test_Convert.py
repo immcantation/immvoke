@@ -408,6 +408,27 @@ class TestAirrOutput(unittest.TestCase):
         self.assertIn('immvoke_unit_id', frame.columns)
         self.assertIn('immvoke_row_hash', frame.columns)
 
+    def test_validation_log_is_named_after_the_table(self):
+        out, validation = self.writeCase(UNPAIRED)
+        report = Convert.writeValidationReport(validation, out)
+
+        self.assertEqual(report.name, 'out.airr_validation.log')
+        text = report.read_text()
+        self.assertIn('AIRR validation of out.tsv', text)
+        self.assertIn('all valid', text)
+        self.assertIn('Result: PASS', text)
+
+    def test_validation_log_lists_row_errors(self):
+        validation = Convert.newValidation()
+        validation.update(header_valid=True, rows_checked=200, rows_invalid=3)
+        validation['errors']['productive is not a boolean'] = 3
+
+        text = Convert.summarizeValidation(validation, 'bcr.tsv')
+
+        self.assertIn('200 checked, 3 invalid (1.5%)', text)
+        self.assertIn('       3  productive is not a boolean', text)
+        self.assertIn('Result: FAIL', text)
+
 
 class TestFastaOutput(unittest.TestCase):
     """

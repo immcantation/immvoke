@@ -37,6 +37,17 @@ dependencies = [
     "pandas>=2.2.3",
     "airr>=2.0",
     "tqdm>=4.64",
+    # ASD's data unit is a Delta Lake of Parquet partitions, staged in a
+    # Google Drive folder: pyarrow reads the partitions, gdown fetches the
+    # folder, since it has no plain HTTP download. The floor is 16 for the
+    # same reason as the pandas floor above: pyarrow wheels before 16 were
+    # built against numpy 1.x and fail to import under numpy>=2.
+    "pyarrow>=16",
+    "gdown>=5.0",
+    # Symscan.py: annotate's matching engine for exact, Hamming and
+    # Levenshtein matching (a Rust symmetric-deletion index; numpy, which it
+    # returns its pairs in, comes with it and with pandas).
+    "symscan>=0.8",
 ]
 
 [project.optional-dependencies]
@@ -56,6 +67,11 @@ path = "src/immvoke/Version.py"
 # automatically as part of the package. Do not add a force-include for them: it
 # duplicates every file and the build fails.
 packages = ["src/immvoke"]
+# Specificity's own tests live alongside its source
+# (Sources/Specificity/tests/) rather than under the top level tests/
+# directory; exclude them here so a built wheel still ships no test code,
+# matching every other source under src/immvoke.
+exclude = ["src/immvoke/Sources/Specificity/tests/*"]
 
 [tool.ruff]
 line-length = 90

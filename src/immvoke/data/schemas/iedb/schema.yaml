@@ -1,0 +1,193 @@
+source: iedb
+schema_version: 1
+harvested: '2026-08-14T00:00:00Z'
+harvested_by: 'immvoke 0.1.0 (hand curated, not scraped: IEDB exposes no HTML form)'
+source_urls:
+  airr_bulk: https://www.iedb.org/downloader.php?file_name=doc/airr_full.zip
+  api: https://query-api.iedb.org/api/v1
+field_aliases: {}
+url_rules: {}
+parse_contracts: {}
+collections:
+  bcr:
+    fields:
+    - name: air_species
+      wildcard: '*'
+      pseudo_values: false
+      values:
+      - Bos taurus
+      - Camelid
+      - Camelus bactrianus
+      - Camelus dromedarius
+      - Camelus ferus
+      - Chiloscyllium plagiosum
+      - Chlorocebus aethiops
+      - Gallus gallus
+      - Ginglymostoma cirratum
+      - Homo sapiens
+      - Lama glama
+      - Macaca fascicularis
+      - Macaca mulatta
+      - Mus musculus
+      - 'Mus musculus 129 GIX+'
+      - Mus musculus B10.RIII
+      - 'Mus musculus BALB/c'
+      - 'Mus musculus C3H/He'
+      - 'Mus musculus C57BL/6'
+      - Mus musculus CBA
+      - 'Mus musculus CBA/J'
+      - Mus musculus FVB
+      - 'Mus musculus HuMAb (Medarex)'
+      - Mus musculus Kunming
+      - Mus musculus Kymouse
+      - Mus musculus PrP null
+      - Mus musculus RBF
+      - Mus musculus Swiss Webster
+      - Mus musculus Xenomouse
+      - Myodes glareolus
+      - Nothocricetulus migratorius
+      - Orectolobus maculatus
+      - Oryctolagus cuniculus
+      - Oryctolagus cuniculus New Zealand White
+      - Pan troglodytes
+      - Rattus
+      - Rattus norvegicus
+      - Rattus norvegicus Sprague-Dawley
+      - Rattus rattus
+      - Squalus acanthias
+      - Sus scrofa
+      - Vicugna pacos
+      - synthetic construct
+    - name: antigen_species
+      wildcard: '*'
+      pseudo_values: false
+      open_values: true
+      values:
+      - Influenza A virus
+      - SARS-CoV2
+      - Human immunodeficiency virus 1
+      - Homo sapiens
+    - name: antigen_structure_type
+      wildcard: '*'
+      pseudo_values: false
+      values:
+      - Linear peptide
+      - Discontinuous peptide
+      - Discontinuous peptide on multi chain
+      - Non-peptidic
+    - name: assay_type
+      wildcard: '*'
+      pseudo_values: false
+      open_values: true
+      values:
+      - neutralization
+      - 3D structure
+      - qualitative binding
+      - dissociation constant KD
+    - name: disease
+      wildcard: '*'
+      pseudo_values: false
+      open_values: true
+      values:
+      - COVID-19
+      - influenza
+      - rheumatoid arthritis
+      - viral infectious disease
+    - name: outcome
+      wildcard: '*'
+      pseudo_values: false
+      values:
+      - Positive
+      - Negative
+    reported_totals: {}
+  tcr:
+    fields:
+    - name: air_species
+      wildcard: '*'
+      pseudo_values: false
+      values:
+      - Bos taurus
+      - Camelid
+      - Camelus bactrianus
+      - Camelus dromedarius
+      - Camelus ferus
+      - Chiloscyllium plagiosum
+      - Chlorocebus aethiops
+      - Gallus gallus
+      - Ginglymostoma cirratum
+      - Homo sapiens
+      - Lama glama
+      - Macaca fascicularis
+      - Macaca mulatta
+      - Mus musculus
+      - 'Mus musculus 129 GIX+'
+      - Mus musculus B10.RIII
+      - 'Mus musculus BALB/c'
+      - 'Mus musculus C3H/He'
+      - 'Mus musculus C57BL/6'
+      - Mus musculus CBA
+      - 'Mus musculus CBA/J'
+      - Mus musculus FVB
+      - 'Mus musculus HuMAb (Medarex)'
+      - Mus musculus Kunming
+      - Mus musculus Kymouse
+      - Mus musculus PrP null
+      - Mus musculus RBF
+      - Mus musculus Swiss Webster
+      - Mus musculus Xenomouse
+      - Myodes glareolus
+      - Nothocricetulus migratorius
+      - Orectolobus maculatus
+      - Oryctolagus cuniculus
+      - Oryctolagus cuniculus New Zealand White
+      - Pan troglodytes
+      - Rattus
+      - Rattus norvegicus
+      - Rattus norvegicus Sprague-Dawley
+      - Rattus rattus
+      - Squalus acanthias
+      - Sus scrofa
+      - Vicugna pacos
+      - synthetic construct
+    - name: antigen_species
+      wildcard: '*'
+      pseudo_values: false
+      open_values: true
+      values:
+      - Influenza A virus
+      - SARS-CoV2
+      - Human immunodeficiency virus 1
+      - Homo sapiens
+    - name: antigen_structure_type
+      wildcard: '*'
+      pseudo_values: false
+      values:
+      - Linear peptide
+      - Discontinuous peptide
+      - Discontinuous peptide on multi chain
+      - Non-peptidic
+    - name: assay_type
+      wildcard: '*'
+      pseudo_values: false
+      open_values: true
+      values:
+      - neutralization
+      - 3D structure
+      - qualitative binding
+      - dissociation constant KD
+    - name: disease
+      wildcard: '*'
+      pseudo_values: false
+      open_values: true
+      values:
+      - COVID-19
+      - influenza
+      - rheumatoid arthritis
+      - viral infectious disease
+    - name: outcome
+      wildcard: '*'
+      pseudo_values: false
+      values:
+      - Positive
+      - Negative
+    reported_totals: {}

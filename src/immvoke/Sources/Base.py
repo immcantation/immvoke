@@ -117,6 +117,28 @@ class SourceBase(ABC):
     #: Shown in `immvoke sources list` and recorded in download provenance,
     #: since it is what governs how downloaded data may be reused.
     license = ''
+    #: Specificity collections whose normalizeChunk output is AIRR named
+    #: rearrangement records rather than the source's own column names. Empty
+    #: for every non-specificity source and for specificity collections that
+    #: are not sequences (assay results, join tables, ...), since those have
+    #: no natural AIRR shape. `immvoke specificity <db> download` writes a
+    #: real, schema-validated rearrangement TSV for a listed collection and a
+    #: plain TSV for everything else.
+    airr_collections = frozenset()
+    #: Whether `immvoke specificity <db> download` keeps the raw mirror,
+    #: <db>/raw/, once every table has been written. False for a source whose
+    #: raw files are only an intermediate step, such as IEDB's bulk ZIP and
+    #: the tables extracted from it; the normalized TSVs are what remain.
+    keep_raw = True
+    #: Specificity filter field -> (placeholder, what it filters on), shown
+    #: for its flag in `immvoke specificity <db> download|search --help`. A
+    #: field missing here gets a generic VALUE and only its values listed.
+    filter_help = {}
+    #: Specificity table -> the columns `immvoke specificity <db> search`
+    #: reports on, as ((column, label, how), ...): how is 'distinct' (count
+    #: its distinct values) or 'top' (its most common values, with counts).
+    #: A table missing here is reported as a row count alone.
+    search_columns = {}
     #: How to cite this source, one string per paper, oldest first. Shown in
     #: `immvoke sources list` and recorded in download provenance, so that
     #: the record of what was downloaded travels with a reminder of how to
@@ -211,6 +233,20 @@ class SourceBase(ABC):
         resolved = self.schema.validateFilters(collection, filters)
 
         return Query(collection=collection, filters=resolved)
+
+    def labelValue(self, column, value):
+        """
+        Name a column's value for `immvoke specificity <db> search`, e.g. a
+        taxon code as its species. The value as is by default.
+
+        Arguments:
+          column (str): the column, from search_columns.
+          value (str): one of its values.
+
+        Returns:
+          str: the label to show.
+        """
+        return value
 
     def resolveOutputPath(self, unit, outdir):
         """

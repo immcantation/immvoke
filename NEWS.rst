@@ -1,6 +1,88 @@
 Release Notes
 ================================================================================
 
+Unreleased
+-------------------------------------------------------------------------------
+
+Specificity:
+
++ Added specificity databases IEDB_, CoV-AbDab_ and ASD_ under
+  ``immvoke specificity <db> search|download``. IEDB's BCR and TCR tables
+  are downloaded as schema-validated AIRR rearrangement TSVs with one record
+  per chain, linked by ``cell_id``, taking IEDB's calculated (IMGT
+  standardized) V/D/J-gene calls over the curated ones, every receptor
+  species kept unless ``--air_species`` names one (e.g. ``--air_species
+  "Homo sapiens"``; a species includes its strains, and a chain with no
+  species recorded is left out), and every assay
+  outcome unless ``--outcome`` names one (``Positive`` or ``Negative``).
+  IEDB's B-cell assay tables (``bcell``, ``bcr_to_bcell``) are not
+  offered: each receptor record already carries its epitope, assay ids and
+  outcome.
+  ``--antigen_species`` keeps receptors whose epitope comes from an antigen
+  organism, by any name IEDB uses, ignoring case (``--antigen_species
+  "Influenza A virus"`` takes in every flu strain); it asks IEDB's API for
+  the organisms of the table's epitopes when the table is downloaded.
++ ``immvoke specificity <db> search <table>`` counts what the table holds
+  once its filters are applied (rows, receptor groups, epitopes and the most
+  common loci, receptor, antigen species and structure types and outcomes,
+  ``--top`` of each), instead of
+  printing the download URL; ``--out`` writes every count as a TSV. Its and
+  download's filters are grouped in ``--help``, each saying what it filters
+  on, and ``--limit`` is left only on ``download all``, the one place it
+  had an effect.
++ IEDB's bcr and tcr tables gain ``iedb_antigen``,
+  ``iedb_antigen_source_species`` and ``iedb_antigen_structure_type``, each
+  record's epitope's antigen, its source species and the epitope's
+  structure type, looked up on IEDB's API at download time.
++ ``--antigen_structure_type`` keeps receptors whose epitope has that IEDB
+  structure type: ``Linear peptide``, ``Discontinuous peptide`` (which
+  includes ``Discontinuous peptide on multi chain``) or ``Non-peptidic``
+  (haptens, glycans, lipids...), IEDB's own Epitope Structure choice.
++ IEDB's bcr and tcr take ``--assay_type`` (e.g. ``neutralization``) and
+  ``--disease`` (e.g. ``COVID-19``; a disease includes those under it),
+  looked up on IEDB's assay API only when given, and ``--paired_only``,
+  keeping receptors with both chains of a pair.
++ IEDB's bulk ZIP is cached in ``~/.cache/immvoke/iedb/`` for a day, shared
+  by search and download, so ``bcr`` then ``tcr`` fetch it once.
++ Filter flags generated from a source's schema are spelled with
+  underscores, as the field is (``--air_species``), and so are
+  ``immvoke specificity ... download``'s own flags (``--dry_run``,
+  ``--no_resume``, ``--strict_airr``).
++ Each specificity download lands in its database's own folder,
+  ``<outdir>/<db>/``: the normalized ``<db>_<table>.tsv`` (e.g.
+  ``iedb/iedb_bcr.tsv``) and its own ``download_metadata.yml``; IEDB's
+  ``raw/`` (the bulk ZIP and what was taken from it) is deleted once the
+  tables are written.
++ Added ``immvoke annotate``, to annotate a query AIRR table against a
+  reference one (e.g. IEDB's BCR table) through symscan_: the heavy chain
+  CDR3, full VDJ or pooled CDR1-3 (``--sequence-region``), within the same
+  V/J-gene (``--partition-by``), exact or at an identity threshold
+  (``--identity-threshold``) under Hamming or Levenshtein distance
+  (``--distance-metric``), or heavy+light chain of the same antibody
+  (``--paired``, one chain of each kind per cell picked by
+  ``--count-field``).
++ ``immvoke annotate --outdir`` writes ``annotation.tsv`` and
+  ``annotation_metadata.yml`` (the options, inputs, reference database and
+  counts of the run), each named after the reference's database and table,
+  e.g. ``iedb_bcr_annotation.tsv``. The annotation keeps each query's best
+  hits, the highest identity (all of them on a tie): ``sequence_id``,
+  ``identity``, ``hit_id`` and that hit's ``antigen``, ``epitope`` and
+  ``antigen_source_species`` -- long rather than wide, one row per (query
+  row, matching reference row), since no separator is safe in IEDB's own
+  epitope names. A summary of the run in prose is written beside it as
+  ``annotation_summary.txt``.
+  ``--full-dist-matrix`` also writes ``annotation_full_matrix.txt``:
+  every pair the filters admit and how close it is (``sequence_id``,
+  ``hit_id``, ``identity``). ``--identity-threshold`` does not apply to it
+  -- it answers how close a query is to everything it was compared with,
+  not what it matched -- but ``--partition-by`` does, and under ``hamming``
+  only equal-length sequences have a distance at all.
+
+.. _IEDB: https://www.iedb.org/
+.. _CoV-AbDab: https://opig.stats.ox.ac.uk/webapps/covabdab/
+.. _ASD: https://naturalantibody.com/agab/
+.. _symscan: https://github.com/yutanagano/symscan
+
 Version 0.1.0: 2026.09.28
 -------------------------------------------------------------------------------
 

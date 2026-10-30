@@ -43,7 +43,22 @@ def setupLogging(verbose=False, quiet=False):
     else:
         level = logging.INFO
 
-    logging.basicConfig(stream=sys.stderr, level=level,
-                        format='%(levelname)s %(message)s')
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(StatusFormatter('%(message)s'))
+    logging.basicConfig(level=level, handlers=[handler])
 
     return logging.getLogger('immvoke')
+
+
+class StatusFormatter(logging.Formatter):
+    """
+    Write status (INFO) lines as plain text, and name the level of every
+    other line: 'WARNING ...', 'ERROR ...', 'DEBUG ...'.
+    """
+
+    def format(self, record):
+        text = super().format(record)
+        if record.levelno == logging.INFO:
+            return text
+
+        return '%s %s' % (record.levelname, text)

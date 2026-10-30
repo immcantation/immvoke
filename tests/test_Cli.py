@@ -26,6 +26,7 @@ from immvoke.Cli import (
     handleReferenceDiff,
     handleReferenceDownload,
     handleReferenceShow,
+    handleSpecificityDownload,
     loadMap,
 )
 from immvoke.Exceptions import ImmvokeError
@@ -90,6 +91,61 @@ class TestArgParser(unittest.TestCase):
         for collection in OasSource.collections:
             self.assertIn(collection, text)
             self.assertIn(OasSource.collection_help[collection], text)
+
+    def test_specificity_help_lists_the_tables(self):
+        """`immvoke specificity iedb download --help` names the tables it accepts."""
+        from immvoke.Sources.Specificity.Iedb import IedbSource
+
+        parser = getArgParser()
+        with mock.patch('sys.stdout', new_callable=io.StringIO) as out:
+            with self.assertRaises(SystemExit):
+                parser.parse_args(['specificity', 'iedb', 'download', '--help'])
+
+        text = out.getvalue()
+        for table in IedbSource.collections:
+            self.assertIn(table, text)
+
+    def test_specificity_all_download_takes_no_table(self):
+        """
+        `specificity all` fans out to every database's every table, so it has
+        no table level of its own the way `specificity <db>` does.
+        """
+        parser = getArgParser()
+        args = parser.parse_args(['specificity', 'all', 'download',
+                                  '--outdir', '/tmp/does-not-need-to-exist'])
+
+        self.assertEqual(args.db, 'all')
+        self.assertEqual(args.action, 'download')
+        self.assertFalse(hasattr(args, 'table'))
+
+    def test_specificity_all_tables_take_the_filters_they_share(self):
+        """
+        IEDB's bcr and tcr filter on the same fields, so `iedb <action>
+        all` takes them; CoV-AbDab has no filters to share.
+        """
+        parser = getArgParser()
+        for action in ('search', 'download'):
+            outdir = ['--outdir', '/tmp/does-not-need-to-exist'] if action == 'download' else []
+            args = parser.parse_args(['specificity', 'iedb', action, 'all',
+                                      '--air_species', 'Homo sapiens'] + outdir)
+            self.assertEqual(args.filter_air_species, 'Homo sapiens')
+
+        with self.assertRaises(SystemExit), mock.patch('sys.stderr'):
+            parser.parse_args(['specificity', 'covabdab', 'search', 'all',
+                               '--air_species', 'Homo sapiens'])
+
+    def test_schema_commands_accept_specificity_databases(self):
+        """
+        A rejected filter value tells the user to run `immvoke schema show`
+        for that source (see Schema.validateFilters), so the schema commands
+        have to accept a specificity database, not only a repertoire source.
+        """
+        parser = getArgParser()
+        for action in ('show', 'refresh'):
+            for source in ('iedb', 'covabdab', 'asd', 'oas'):
+                with self.subTest(action=action, source=source):
+                    args = parser.parse_args(['schema', action, '--source', source])
+                    self.assertEqual(args.source, source)
 
     def test_collection_is_required(self):
         """
@@ -260,6 +316,27 @@ class TestHandleDownload(unittest.TestCase):
 
         self.assertTrue((self.outdir / 'samplesheet_airrflow_airr.tsv').exists())
         self.assertTrue((self.outdir / 'samplesheet_airrflow_fasta.tsv').exists())
+
+
+class TestHandleSpecificityDownload(unittest.TestCase):
+    """
+    Tests for the specificity download command's output layout
+    """
+
+    def test_each_database_gets_its_own_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = Namespace(db='fakedb', table='paired', outdir=Path(tmp), limit=None,
+                             dry_run=False, no_resume=False, strict_airr=False)
+
+            with mock.patch('immvoke.Cli.getSpecificitySource',
+                            return_value=StubSource(None)):
+                self.assertEqual(handleSpecificityDownload(args), 0)
+
+            written = sorted(str(p.relative_to(tmp)) for p in Path(tmp).rglob('*')
+                             if p.is_file())
+        self.assertEqual(written, ['fakedb/download_metadata.yml',
+                                   'fakedb/fakedb_paired.tsv',
+                                   'fakedb/raw/' + StubSource.unit.unit_id])
 
 
 def makeReference(root, chain='IGHV', records=(('IGHV1-2*02', 'ACGT'),)):
